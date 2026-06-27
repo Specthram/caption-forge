@@ -1,0 +1,18 @@
+{
+    "weights": {
+        "quality": 0.40,
+        "diversity": 0.35,
+        "hygiene": 0.25
+    },
+    "recommended_sizes": {
+        "character": [20, 150],
+        "style": [50, 500],
+        "concept": [30, 300]
+    },
+    "default_scorers": ["musiq", "topiq_nr", "laion_aes", "dinov2"],
+    "low_quality_floor": 70,
+    "min_resolution_side": 1024,
+    "near_duplicate_cosine": 0.92,
+    "near_duplicate_similarity": 88,
+    "outlier_sigma": 2.5
+}

@@ -1,0 +1,58 @@
+{
+    "framing_buckets": {
+        "body_part": [
+            "hand_focus",
+            "foot_focus",
+            "leg_focus",
+            "thigh_focus",
+            "ass_focus",
+            "back_focus",
+            "eye_focus",
+            "navel_focus",
+            "lower_body"
+        ],
+        "face": [
+            "portrait",
+            "close-up",
+            "face_focus",
+            "headshot"
+        ],
+        "upper_body": [
+            "upper_body",
+            "cowboy_shot",
+            "bust_shot"
+        ],
+        "full_body": [
+            "full_body",
+            "wide_shot",
+            "very_wide_shot"
+        ]
+    },
+    "target_types": {
+        "character": {
+            "label": "Character",
+            "ratios": {
+                "face": 30,
+                "upper_body": 40,
+                "full_body": 20,
+                "body_part": 10
+            }
+        },
+        "style": {
+            "label": "Style",
+            "ratios": {
+                "any": 100
+            }
+        },
+        "concept": {
+            "label": "Concept",
+            "ratios": {
+                "any": 100
+            }
+        }
+    },
+    "selection": {
+        "diversity_weight": 0.7,
+        "quality_weight": 0.3
+    }
+}

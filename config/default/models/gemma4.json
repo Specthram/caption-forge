@@ -1,0 +1,16 @@
+{
+    "prompts": {
+        "description": {
+            "prompt": "Describe this image in exhaustive, literal detail to create a caption for a text-to-image AI training dataset.\n\nCRITICAL RULES:\n\n- Do NOT use introductory filler phrases like 'The image shows', 'This is a picture of', or 'Here we can see'. Start describing immediately.\n- Be objective and literal. Do not guess the emotions, context, or backstory unless clearly visible.\n- Output a single, continuous paragraph without line breaks or bullet points.\n- VERY IMPORTANT : Do not caption what is not visible.\n\nSTRUCTURE YOUR DESCRIPTION IN THIS ORDER (ignore when empty) :\n\n- Medium & Style: (e.g., a photograph, an oil painting, a 3D render, digital illustration, anime style, ..).\n- Main Subject: Appearance, age, gender, exact clothing, pose, facial expression, and where they are looking.\n- Action/Interaction: What is the subject doing?\n- Setting & Background: Detailed description of the environment, props, and background elements.\n- Lighting & Colors: (e.g., cinematic lighting, harsh sunlight, neon glow, muted tones, high contrast).\n- Camera & Composition: Framing (e.g., close-up, extreme wide shot, depth of field), angle (e.g., low angle, bird's-eye view), and focus.\n- Text: Exact transcription of any visible text or typography in the image, placed in quotes with position.",
+            "default": true
+        },
+        "Tag-guided description": {
+            "prompt": "Describe this image in exhaustive, literal detail to create a caption for a text-to-image AI training dataset.\n\nCRITICAL RULES:\n\n- Do NOT use introductory filler phrases like 'The image shows', 'This is a picture of', or 'Here we can see'. Start describing immediately.\n- Be objective and literal. Do not guess the emotions, context, or backstory unless clearly visible.\n- Output a single, continuous paragraph without line breaks or bullet points.\n- VERY IMPORTANT : Do not caption what is not visible.\n\nSTRUCTURE YOUR DESCRIPTION IN THIS ORDER (ignore when empty) :\n\n- Medium & Style: (e.g., a photograph, an oil painting, a 3D render, digital illustration, anime style, ..).\n- Main Subject: Appearance, age, gender, exact clothing, pose, facial expression, and where they are looking.\n- Action/Interaction: What is the subject doing?\n- Setting & Background: Detailed description of the environment, props, and background elements.\n- Lighting & Colors: (e.g., cinematic lighting, harsh sunlight, neon glow, muted tones, high contrast).\n- Camera & Composition: Framing (e.g., close-up, extreme wide shot, depth of field), angle (e.g., low angle, bird's-eye view), and focus.\n- Text: Exact transcription of any visible text or typography in the image, placed in quotes with position.\n\nThe picture was already qualified by these tags: {{tags}}. Treat them as ground truth: stay consistent with them and do not contradict them, but describe only what is actually visible.",
+            "default": false
+        }
+    },
+    "settings": {
+        "think_mode": "off",
+        "temperature": 0.7
+    }
+}

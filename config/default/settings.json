@@ -1,0 +1,18 @@
+{
+    "device": "cuda",
+    "caption_image_size": 1024,
+    "video_resolution": 256,
+    "video_fps": 2,
+    "video_max_seconds": 5,
+    "caption_extensions": [
+        "txt",
+        "caption",
+        "booru"
+    ],
+    "gguf_n_ctx": 4096,
+    "grounding_model_size": "so400m",
+    "grounding_resolution": 512,
+    "grounding_threshold_caption": 55.0,
+    "grounding_threshold_tags": 55.0,
+    "grounding_claim_model": ""
+}

@@ -1,0 +1,97 @@
+/* Global reset, scrollbars and keyframes — mirrors the prototype shell. */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #131418;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  color: #e6e7ea;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: #e8935a;
+  text-decoration: none;
+}
+a:hover {
+  color: #f0aa78;
+  text-decoration: underline;
+}
+
+::selection {
+  background: rgba(232, 147, 90, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2c2f38;
+  border-radius: 5px;
+  border: 2px solid #17181d;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 1px solid #e8935a55;
+  outline-offset: 0;
+}
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: #e8935a;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Datasets grid: the body click inspects; the ✕ (revealed on hover) unlinks. */
+.cf-card-removable:hover {
+  border-color: #3a3d47 !important;
+}
+.cf-remove-x {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.cf-card-removable:hover .cf-remove-x {
+  opacity: 1;
+}
+
+@keyframes cfspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cfpulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes cfbar {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 24px 0;
+  }
+}

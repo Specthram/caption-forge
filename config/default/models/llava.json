@@ -1,0 +1,32 @@
+{
+    "prompts": {
+        "Formal Descriptive": {
+            "prompt": "Write a long descriptive caption for this image in a formal tone.",
+            "default": false
+        },
+        "Detailed Descriptive": {
+            "prompt": "Provide a detailed description of the image.",
+            "default": false
+        },
+        "Booru tag list": {
+            "prompt": "Write a list of Booru tags for this image.",
+            "default": false
+        },
+        "descriptive_fluent": {
+            "prompt": "Please provide a comprehensive and detailed description of the following image, written in natural and fluent english. Include all visible elements and their attributes (e.g., color, size, shape, texture), their spatial relationships, and any notable features or context. Ensure your description, written in natural and fluent english, is clear and vivid, capturing every aspect of the image without omitting any important details.",
+            "default": false
+        },
+        "training prompt": {
+            "prompt": "Write a long stable diffusion prompt for this image.",
+            "default": false
+        },
+        "Tag-guided description": {
+            "prompt": "Write a long descriptive caption for this image in a formal tone.\n\nThe picture was already qualified by these tags: {{tags}}. Treat them as ground truth: stay consistent with them and do not contradict them, but describe only what is actually visible.",
+            "default": false
+        }
+    },
+    "settings": {
+        "think_mode": "auto",
+        "temperature": 0.7
+    }
+}

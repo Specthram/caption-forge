@@ -1,0 +1,63 @@
+[MASTER]
+extension-pkg-allow-list=cv2
+# Optional smell checkers (off by default in pylint).
+load-plugins=pylint.extensions.mccabe,
+    pylint.extensions.broad_try_clause,
+    pylint.extensions.check_elif,
+    pylint.extensions.confusing_elif,
+    pylint.extensions.for_any_all,
+    pylint.extensions.set_membership,
+    pylint.extensions.overlapping_exceptions,
+    pylint.extensions.redefined_variable_type,
+    pylint.extensions.dict_init_mutate,
+    pylint.extensions.dunder,
+    pylint.extensions.typing,
+    pylint.extensions.private_import,
+    pylint.extensions.empty_comment,
+    pylint.extensions.eq_without_hash,
+    pylint.extensions.docparams
+
+[MESSAGES CONTROL]
+# Flag stale "# pylint: disable" comments.
+enable=useless-suppression
+# useless-suppression is informational (I0021): it does not lower the
+# score, so it must be an explicit failure to be enforced.
+fail-on=useless-suppression
+
+[FORMAT]
+# Ratchet: the largest module (libraries_gallery.py) sits just under this
+# ceiling; lower it further as modules get split, never raise it.
+max-module-lines=1400
+
+[TYPECHECK]
+# diffusers builds its public API through a lazy module shim that astroid
+# cannot import, so the FLUX.2 pipeline imports (src.watermark_flux) trip a
+# false import-error; skip inference for it like the C-extension modules.
+ignored-modules=diffusers
+# cv2 is a C extension pylint cannot introspect (false-positive no-member).
+generated-members=cv2.*
+# Gradio attaches event-listener methods (.click/.change/.load/...) to its
+# components dynamically, which pylint's inference cannot see.
+ignored-classes=Blocks,Button,Dropdown,File,Checkbox,Textbox,Image,Video,
+    Radio,Slider,Number,HTML,Group,Row,Column,Tabs,TabItem,Markdown,Progress
+
+[DESIGN]
+# Gradio callbacks are bound to many UI inputs, and a few media/sampling
+# helpers are legitimately local-heavy.
+max-args=10
+max-positional-arguments=10
+max-locals=26
+# McCabe guard rail: the current worst offender rates 12, so this passes
+# today and blocks new complexity. Tighten to 10 when those are split.
+max-complexity=12
+# Try bodies longer than this hide which statement the except targets.
+max-try-statements=6
+
+[SIMILARITIES]
+# The Caption and Medias tabs share short, irreducible layout boilerplate:
+# their handle dataclasses end with the same paginated-grid fields (top/bottom
+# pager + cards) and their grid builders open with the same shared-component
+# unpacking, where the names match because the controls are the same concept.
+# Raise the threshold so this trivial repetition is not flagged while real
+# duplication still is.
+min-similarity-lines=12
