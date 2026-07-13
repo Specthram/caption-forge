@@ -62,6 +62,8 @@ export function AutoBuildCoverageMap({
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
   const [zoneHover, setZoneHover] = useState<number | null>(null);
+  // Screen position of the cursor, for the large hover preview.
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drag = useRef<{
     px: number;
@@ -249,6 +251,10 @@ export function AutoBuildCoverageMap({
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerLeave={endDrag}
+        onMouseMove={(event) =>
+          setCursor({ x: event.clientX, y: event.clientY })
+        }
+        onMouseLeave={() => setCursor(null)}
         onDoubleClick={onDoubleClick}
       >
         <g transform={`translate(${tx} ${ty}) scale(${zoom})`}>
@@ -388,30 +394,18 @@ export function AutoBuildCoverageMap({
         </g>
       </svg>
 
-      {hoveredPoint?.xy && (
-        <div
-          style={{
-            ...tooltip,
-            left: `${Math.max(10, Math.min(90, (sx(hoveredPoint.xy[0]) / W) * 100))}%`,
-            top: `${(sy(hoveredPoint.xy[1]) / H) * 100}%`,
-          }}
-        >
-          <img src={thumbUrl(hoveredPoint.id)} alt="" style={tooltipThumb} />
-          <div>
-            <div style={{ color: colors.text }}>{hoveredPoint.name}</div>
-            <div
-              style={{
-                color: replaceMode
-                  ? colors.accent
-                  : colors.textFaint,
-              }}
-            >
-              {replaceMode && hoveredPoint.role !== "pick"
-                ? "candidate — click to swap it in"
-                : ROLE_LABEL[hoveredPoint.role]}
-            </div>
-          </div>
-        </div>
+      {hoveredPoint?.xy && cursor && (
+        <HoverPreview
+          id={hoveredPoint.id}
+          name={hoveredPoint.name}
+          role={
+            replaceMode && hoveredPoint.role !== "pick"
+              ? "candidate — click to swap it in"
+              : ROLE_LABEL[hoveredPoint.role]
+          }
+          roleColor={replaceMode ? colors.accent : colors.textFaint}
+          cursor={cursor}
+        />
       )}
 
       {zoneHover != null && map.zones[zoneHover] && (
@@ -459,29 +453,68 @@ export function AutoBuildCoverageMap({
   );
 }
 
-const tooltip = {
-  position: "absolute",
-  transform: "translate(-50%, -120%)",
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "4px 6px",
-  borderRadius: 5,
-  background: "rgba(15,16,19,0.92)",
-  border: `1px solid ${colors.borderHover}`,
-  fontSize: 9,
-  fontFamily: "monospace",
-  whiteSpace: "nowrap",
-  pointerEvents: "none",
-  zIndex: 3,
-} as const;
+const PREVIEW_SIZE = 320;
+const PREVIEW_GAP = 18;
 
-const tooltipThumb = {
-  width: 34,
-  height: 26,
-  objectFit: "cover",
-  borderRadius: 3,
-  flex: "none",
+/**
+ * A large image preview of the hovered map point, pinned to the left of the
+ * cursor (flips to the right near the left edge) as a fixed overlay so it can
+ * spill out of the narrow map panel and stay big and readable.
+ */
+function HoverPreview({
+  id,
+  name,
+  role,
+  roleColor,
+  cursor,
+}: {
+  id: number;
+  name: string;
+  role: string;
+  roleColor: string;
+  cursor: { x: number; y: number };
+}) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = cursor.x - PREVIEW_SIZE - PREVIEW_GAP;
+  if (left < 8) left = cursor.x + PREVIEW_GAP; // flip to the right near edge
+  left = Math.max(8, Math.min(vw - PREVIEW_SIZE - 8, left));
+  const top = Math.max(
+    8,
+    Math.min(vh - PREVIEW_SIZE - 40, cursor.y - PREVIEW_SIZE / 2),
+  );
+  return (
+    <div style={{ ...hoverPreview, left, top, width: PREVIEW_SIZE }}>
+      <img
+        src={thumbUrl(id)}
+        alt=""
+        style={{
+          width: "100%",
+          maxHeight: PREVIEW_SIZE,
+          objectFit: "contain",
+          borderRadius: 6,
+          background: colors.app,
+          display: "block",
+        }}
+      />
+      <div style={{ color: colors.text, fontSize: 11, marginTop: 5 }}>
+        {name}
+      </div>
+      <div style={{ color: roleColor, fontSize: 10 }}>{role}</div>
+    </div>
+  );
+}
+
+const hoverPreview = {
+  position: "fixed",
+  zIndex: 999,
+  padding: 6,
+  borderRadius: 8,
+  background: "rgba(15,16,19,0.96)",
+  border: `1px solid ${colors.borderHover}`,
+  boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+  fontFamily: "monospace",
+  pointerEvents: "none",
 } as const;
 
 const zoneTip = {
