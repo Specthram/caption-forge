@@ -23,6 +23,7 @@ import { colors, font, radii, scorerColor } from "../../design/tokens";
 import { useJobsStore } from "../../store/jobsStore";
 import { useUiStore } from "../../store/uiStore";
 import { Button } from "../atoms";
+import { CompositionMap } from "./CompositionMap";
 import { FlaggedMedia } from "./FlaggedMedia";
 import { QualityCharts } from "./QualityCharts";
 import { QualityScoreRow } from "./QualityScoreRow";
@@ -441,6 +442,7 @@ export function QualityReportTab({ datasetId }: { datasetId: number }) {
         <>
           <QualityScoreRow report={stored} />
           <QualityCharts report={stored} />
+          <CompositionMap report={stored} />
           <FlaggedMedia
             report={stored}
             resolutions={resolutions}

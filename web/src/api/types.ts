@@ -905,7 +905,7 @@ export interface GroundingSize {
 export interface ReportRow {
   label: string;
   value: string;
-  tone: "ok" | "warn" | "danger" | "info" | "muted";
+  tone: "ok" | "warn" | "danger" | "info" | "muted" | "composition";
 }
 
 /** One scored pillar of the report (quality / diversity / hygiene). */
@@ -933,6 +933,25 @@ export interface ReportMapPoint {
   cluster: number;
   outlier: boolean;
   near_dup: boolean;
+  quality: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+/**
+ * One dot of the composition map — positioned in framing space (the 2-D
+ * projection of the Depth-Anything V2 signature) and coloured by visual
+ * `style` bucket, so re-skins (same framing, different style) read as
+ * different colours inside one framing cluster.
+ */
+export interface CompositionMapPoint {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  framing: number;
+  style: string;
+  reskin: boolean;
   quality: number | null;
   width: number | null;
   height: number | null;
@@ -1027,6 +1046,14 @@ export interface DatasetReport {
   map_points: ReportMapPoint[];
   clusters: number;
   spread: number;
+  /** Composition map: one dot per depth-embedded media, empty without depth. */
+  composition_map: CompositionMapPoint[];
+  /** Re-skin id pairs (same framing, different style) drawn as teal links. */
+  composition_links: [number, number][];
+  /** Distinct framing clusters over the depth signatures. */
+  framings: number;
+  /** Number of re-skin pairs. */
+  reskins: number;
   issues: ReportIssue[];
   recommendations: ReportRecommendation[];
   framing: [string, number, number, number | null][];

@@ -1,8 +1,9 @@
 {
     "weights": {
-        "quality": 0.40,
-        "diversity": 0.35,
-        "hygiene": 0.25
+        "quality": 0.35,
+        "diversity": 0.30,
+        "composition": 0.15,
+        "hygiene": 0.20
     },
     "recommended_sizes": {
         "character": [20, 150],

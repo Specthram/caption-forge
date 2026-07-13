@@ -172,9 +172,28 @@ export function toneColor(tone: string): string {
       return colors.danger;
     case "info":
       return colors.info;
+    case "composition":
+      return colors.composition;
     default:
       return colors.textMuted;
   }
+}
+
+/**
+ * Node palette of the composition map — the five coarse "visual style"
+ * buckets (see `src/hue_bucket.py`). Colouring by style makes a re-skin
+ * (same framing, different style) legible inside one framing cluster.
+ */
+export const compositionStyleColors: Record<string, string> = {
+  warm: "#e0885a",
+  cool: "#6fa8dc",
+  neutral: "#9aa0aa",
+  green: "#8bc48a",
+  pink: "#e06c9d",
+} as const;
+
+export function styleColor(key: string): string {
+  return compositionStyleColors[key] ?? colors.textMuted;
 }
 
 /** Cluster palette of the diversity map (wraps past six clusters). */

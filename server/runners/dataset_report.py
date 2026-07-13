@@ -17,7 +17,8 @@ import time
 from dataclasses import dataclass
 
 from server.jobs import Progress
-from src import config, dataset_quality, embeddings, image_stats, quality
+from src import config, dataset_quality, depth_embeddings, embeddings
+from src import hue_bucket, image_stats, quality
 from src import sqlite_store as store
 from src import storage
 from src.media import is_video_file
@@ -167,6 +168,27 @@ def _try_value(work, label: str, row: dict):
         return None
 
 
+def _styles(images, depth_vectors: dict) -> dict:
+    """Return the composition-map style bucket of each depth-embedded image.
+
+    Model-free hue bucketing (:func:`src.hue_bucket.classify`), computed only
+    for the media carrying a depth signature — so a dataset whose depth index
+    never ran pays nothing here. An undecodable file is skipped, not fatal.
+    """
+    styles = {}
+    for item in images:
+        if item["id"] not in depth_vectors or not item["eff_path"]:
+            continue
+        bucket = _try_value(
+            lambda it=item: hue_bucket.classify(it["eff_path"]),
+            "style bucket",
+            item,
+        )
+        if bucket:
+            styles[item["id"]] = bucket
+    return styles
+
+
 def _snapshot(spec, images, videos, stats) -> dataset_quality.Snapshot:
     """Gather every repository read the engine needs into one snapshot."""
     ids = [item["id"] for item in images]
@@ -182,6 +204,15 @@ def _snapshot(spec, images, videos, stats) -> dataset_quality.Snapshot:
         media_id: embeddings.blob_to_vector(blob)
         for media_id, blob in blobs.items()
     }
+    # The composition pillar and map read the depth signatures the (opt-in)
+    # depth index step stored — never computed here. Empty when it never ran;
+    # the pillar and map then stay diagnostic-only.
+    depth_blobs = store.media_embeddings(depth_embeddings.MODEL_ID, ids)
+    depth_vectors = {
+        media_id: depth_embeddings.blob_to_vector(blob)
+        for media_id, blob in depth_blobs.items()
+    }
+    styles = _styles(images, depth_vectors)
     captions = storage.read_captions_bulk(
         spec.dataset_id, [str(media_id) for media_id in ids], spec.caption_type
     )
@@ -195,6 +226,8 @@ def _snapshot(spec, images, videos, stats) -> dataset_quality.Snapshot:
         missing_count=sum(1 for item in images + videos if item["missing"]),
         scorers=tuple(spec.scorers),
         vectors_by_id=vectors,
+        depth_vectors_by_id=depth_vectors,
+        styles_by_id=styles,
         stats_by_id=stats,
         captions_by_id={
             media_id: captions.get(str(media_id), "") for media_id in ids
