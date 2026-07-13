@@ -1,0 +1,20 @@
+{
+    "prompts": {
+        "Simple Description": {
+            "prompt": "Describe this image.",
+            "default": true
+        },
+        "Simple Description": {
+            "prompt": "Describe this image.",
+            "default": false
+        },
+        "Tag-guided description": {
+            "prompt": "Describe this image.\n\nThe picture was already qualified by these tags: {{tags}}. Treat them as ground truth: stay consistent with them and do not contradict them, but describe only what is actually visible.",
+            "default": false
+        }
+    },
+    "settings": {
+        "think_mode": "off",
+        "temperature": 0.7
+    }
+}

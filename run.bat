@@ -1,51 +1,46 @@
 @echo off
-REM This script sets up the virtual environment and launches the captioning application.
+REM Caption Forge - launcher (FastAPI + React). Run install.bat first if the
+REM venv or the web build is missing.
 
-REM --- Python Check ---
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Python was not found.
-    echo Please ensure Python is installed and added to your system's PATH.
-    pause
-    exit /b
-)
+setlocal
+title Caption Forge
 
-REM --- Virtual Environment Check and Creation ---
 if not exist ".\venv\Scripts\activate.bat" (
+    echo Virtual environment not found.
+    echo Please run install.bat first to set up Caption Forge.
     echo.
-    echo Virtual environment not found. Creating it now...
-    python -m venv venv
-    if %errorlevel% neq 0 (
-        echo FAILED to create the virtual environment.
-        pause
-        exit /b
-    )
-
-    echo.
-    echo Activating environment...
-    call ".\venv\Scripts\activate.bat"
-
-    echo.
-    echo Installing dependencies. This step may take several minutes...
-    echo Installing dependencies from requirements.txt...
-    pip install -r requirements.txt
-
-    pip install torch --index-url https://download.pytorch.org/whl/cu128
-    pip install torchvision --index-url https://download.pytorch.org/whl/cu128
-    
-    echo.
-    echo Installation complete!
-) else (
-    echo.
-    echo Virtual environment found. Activating...
-    call ".\venv\Scripts\activate.bat"
+    pause
+    exit /b 1
 )
 
-REM --- Launch the Python Application ---
-echo.
-echo Launching the Gradio application...
-python app.py
+call ".\venv\Scripts\activate.bat"
+
+:launch
+REM Build the front on every start/restart. FastAPI serves web\dist; the
+REM restart button loops back here, so a code change is live after restart.
+echo Building React front-end...
+pushd web
+call npm run build
+popd
+if not exist ".\web\dist\index.html" (
+    echo FAILED to build the React front-end. Run install.bat again.
+    pause
+    exit /b 1
+)
+
+echo Launching Caption Forge on http://127.0.0.1:7776 ...
+python -m uvicorn server.main:app --host 127.0.0.1 --port 7776
+
+REM Exit code 3 = the in-app "Restart server" button (src.constants.
+REM RESTART_EXIT_CODE): relaunch. Any other code (crash, normal close)
+REM falls through instead of looping.
+if %errorlevel% equ 3 (
+    echo.
+    echo Restarting Caption Forge...
+    goto :launch
+)
 
 echo.
 echo Application closed. Press any key to exit.
 pause
+endlocal

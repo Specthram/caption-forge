@@ -1,0 +1,16 @@
+{
+    "prompts": {
+        "AI_Toolkit_Prompt": {
+            "prompt": "Caption this image as if you were going to try to generate it with an image generator. Be thurough and describe everything in the image. Be decisive by stating things as they are. Do not say things like \"It appears that\" Or \"possibly\". Start out with things like \"A person on the beach\" or \"A black dragon\". No preamble. Just get to the point.",
+            "default": true
+        },
+        "Tag-guided description": {
+            "prompt": "Caption this image as if you were going to try to generate it with an image generator. Be thurough and describe everything in the image. Be decisive by stating things as they are. Do not say things like \"It appears that\" Or \"possibly\". Start out with things like \"A person on the beach\" or \"A black dragon\". No preamble. Just get to the point.\n\nThe picture was already qualified by these tags: {{tags}}. Treat them as ground truth: stay consistent with them and do not contradict them, but describe only what is actually visible.",
+            "default": false
+        }
+    },
+    "settings": {
+        "think_mode": "off",
+        "temperature": 0.7
+    }
+}
