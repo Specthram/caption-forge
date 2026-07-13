@@ -1318,7 +1318,15 @@ function PreviewLightbox({
   onClose: () => void;
 }) {
   return (
-    <div onClick={onClose} style={lightboxBackdrop}>
+    <div
+      onClick={(event) => {
+        // Stop the click bubbling to the Studio backdrop, which would close
+        // the whole Studio — the outside click must close only the zoom.
+        event.stopPropagation();
+        onClose();
+      }}
+      style={lightboxBackdrop}
+    >
       <div onClick={(event) => event.stopPropagation()} style={lightboxPanel}>
         <img src={fileUrl(pick.media_id)} alt="" style={lightboxImage} />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

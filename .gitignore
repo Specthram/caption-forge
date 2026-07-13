@@ -12,43 +12,21 @@
 __pycache__/
 /.pytest_cache/
 /.cache/
-# Generated thumbnail cache (rebuilt lazily during a library scan/upload).
 /cache/
-# User-provided HF config/processor files (no weights) used to avoid the
-# runtime download for safetensors models.
 /hf_config/
-# SQLite datasets database (created empty at first launch). Keep the folder in
-# the repo via its .gitkeep, but never commit the database files themselves.
-# Future schema migrations are code and ARE versioned.
 /database/*
 !/database/.gitkeep
 !/database/migrations/
-# Managed media library (images copied in and renamed by hash). Keep the
-# folder via its .gitkeep, but never commit the stored media.
 /storage/*
 !/storage/.gitkeep
-# Prebuilt llama-cpp wheel downloaded by install.bat (deleted after install;
-# ignored so a leftover from an interrupted install is never versioned).
 /*.whl
-# Claude Code project files: version the skill and the preview harness
-# script, ignore everything else (local settings, generated fixtures, the
-# throwaway preview database and deploy output).
 /.claude/
-!/.claude/skills/
-!/.claude/preview/
-/.claude/preview/images/
-/.claude/preview/deploy/
-/.claude/preview/thumbnails/
-/.claude/preview/*.db
-/.claude/preview/*.db-*
+/handoffs/
 /.idea/
 *.csv
-# React front-end (web/): commit the source and package-lock.json, ignore the
-# installed modules, the Vite build output and its cache.
 /web/node_modules/
 /web/dist/
 /web/.vite/
-# IDE agent rule files (caveman activation etc.) — kept local, never committed.
 /.cursor/
 /.windsurf/
 /.clinerules/
