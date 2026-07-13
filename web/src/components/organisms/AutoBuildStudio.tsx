@@ -774,11 +774,12 @@ export function AutoBuildStudio({
             )}
 
             {config.data?.depth_enabled &&
-              (config.data?.undepthed ?? 0) > 0 && (
+              (result?.undepthed ?? 0) > 0 && (
                 <div style={depthNote}>
-                  ◇ {config.data.undepthed} media have no composition depth yet
-                  — run the Composition index (Libraries → Index) for the full
-                  re-skin signal; fusion falls back to DINOv2 alone until then.
+                  ◇ {result?.undepthed} media in this scope have no composition
+                  depth yet — run the Composition index (Libraries → Index) for
+                  the full re-skin signal; fusion falls back to DINOv2 alone
+                  until then.
                 </div>
               )}
 

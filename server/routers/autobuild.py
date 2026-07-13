@@ -13,7 +13,7 @@ from server.schemas import (
     AutobuildPreviewBody,
     AutobuildUpdateBody,
 )
-from src import depth_embeddings, embeddings, index_steps, quality, settings
+from src import embeddings, index_steps, quality, settings
 from src import sqlite_store as store
 
 router = APIRouter(prefix="/api/autobuild", tags=["autobuild"])
@@ -38,9 +38,6 @@ def autobuild_config() -> dict:
         ],
         "unhashed": store.count_media_without_hash(),
         "unembedded": store.count_media_without_embedding(embeddings.MODEL_ID),
-        "undepthed": store.count_media_without_embedding(
-            depth_embeddings.MODEL_ID
-        ),
         "depth_enabled": settings.is_index_step_enabled(index_steps.DEPTH),
     }
 

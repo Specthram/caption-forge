@@ -475,11 +475,27 @@ def _assemble(recipe, corpus, candidates, picks, meta, tags, pref, stale=()):
         "zones": autobuild_studio.uncovered_zones(corpus, candidates, picks),
         "map": _map(corpus, candidates, picks, recipe, cluster),
         "proximity": _proximity(corpus, picks),
+        "undepthed": _undepthed(corpus, candidates),
         "stale_tags": list(stale),
         "dominant_tag": _dominant_tag(picked_cards),
         "semantic_available": _semantic_available(),
         **panel,
     }
+
+
+def _undepthed(corpus, candidates) -> int:
+    """Return how many in-scope images still lack a composition signature.
+
+    Scoped to the build's own pool — the recipe's libraries and tag filters
+    already narrowed ``candidates`` — so the Studio's composition advice
+    counts only the media this build would fuse, not the whole database.
+    Videos carry no depth signature (images only), so they never count.
+    """
+    return sum(
+        1
+        for cand in candidates
+        if not cand.is_video and cand.id not in corpus.depth_vectors
+    )
 
 
 def _proximity(corpus, picks) -> dict:
@@ -628,6 +644,7 @@ def _empty_preview() -> dict:
             "floor": autobuild_studio.PROXIMITY_FLOOR,
             "edges": [],
         },
+        "undepthed": 0,
         "stale_tags": [],
         "dominant_tag": None,
         "semantic_available": _semantic_available(),

@@ -624,8 +624,6 @@ export interface AutobuildStudioConfig {
   libraries: { id: number; name: string }[];
   unhashed: number;
   unembedded: number;
-  /** Live images with no Depth-Anything V2 composition signature yet. */
-  undepthed: number;
   /** Whether the composition (depth) index step runs on this machine. */
   depth_enabled: boolean;
 }
@@ -716,6 +714,12 @@ export interface AutobuildStudioPreview {
     floor: number;
     edges: [number, number, number, number][];
   };
+  /**
+   * In-scope images (the build's own pool — the recipe's libraries and tag
+   * filters already applied) with no Depth-Anything V2 composition signature
+   * yet. Drives the Studio's composition advice, scoped to this build.
+   */
+  undepthed: number;
   /**
    * Locked/excluded recipe tags that no longer exist in the vocabulary (a
    * saved recipe naming a since-deleted tag). The engine ignores them so the
