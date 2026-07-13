@@ -60,6 +60,24 @@ def test_locked_tags_are_not_a_ranking_signal():
     assert studio.subject_active(Recipe(semantic_q="red"))
 
 
+def test_proximity_edges_are_sparse_and_ordered():
+    """Only pick pairs at or above the floor become edges, sorted [a, b]."""
+    pool = [_media(1), _media(2), _media(3)]
+    vectors = {
+        1: _vec(1.0, 0.0),
+        2: _vec(0.999, 0.045),  # ~identical to 1 -> near-duplicate (>=0.92)
+        3: _vec(0.0, 1.0),  # orthogonal to 1 -> below the 0.70 floor
+    }
+    corpus = _corpus(pool, vectors)
+    edges = studio.proximity_edges(corpus, [1, 2, 3])
+    assert [edge[:2] for edge in edges] == [[1, 2]]
+    assert edges[0][2] >= studio.NEAR_DUP_COSINE
+    # A pick without a vector contributes no edge.
+    assert studio.proximity_edges(corpus, [1, 2, 99]) == edges
+    # A high floor drops even the near-duplicate pair.
+    assert studio.proximity_edges(corpus, [1, 2, 3], floor=0.999) == []
+
+
 def test_prepare_gates_off_subject_when_signal_active():
     """A candidate below the subject gate is excluded, not dropped."""
     recipe = Recipe(semantic_q="red", min_score=0)

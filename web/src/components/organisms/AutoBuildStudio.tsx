@@ -31,6 +31,7 @@ import type {
 } from "../../api/types";
 import { colors, font, radii } from "../../design/tokens";
 import { AutoBuildCoverageMap } from "../molecules/AutoBuildCoverageMap";
+import { AutoBuildProximity } from "../molecules/AutoBuildProximity";
 
 const SUGGEST_DEBOUNCE_MS = 500;
 const SIZE_PRESETS = [20, 50, 100, 500];
@@ -46,6 +47,10 @@ const FRAMING_HINT: Record<string, string> = {
 };
 
 const thumbUrl = (id: number) => `/api/media/${id}/thumb`;
+
+/** Normalize a tag name for comparison — mirrors `framing.normalize_tag`. */
+const normTag = (name: string) =>
+  name.trim().toLowerCase().split(/\s+/).join("_");
 
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -115,7 +120,9 @@ export function AutoBuildStudio({
   const [forced, setForced] = useState<number[]>([]);
   const [kept, setKept] = useState<number[]>([]);
   const [rebal, setRebal] = useState(false);
-  const [view, setView] = useState<"grid" | "clusters">("grid");
+  const [view, setView] = useState<"grid" | "clusters" | "proximity">("grid");
+  const [proxSim, setProxSim] = useState(0.85);
+  const [proxHover, setProxHover] = useState<number | null>(null);
   const [name, setName] = useState("");
   const [result, setResult] = useState<AutobuildStudioPreview | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
@@ -270,6 +277,12 @@ export function AutoBuildStudio({
     void previewRef.current.run(recipeRef.current, setResult, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropped, forced, kept, rebal]);
+
+  // Proximity is gated behind a non-empty selection; if a rebuild empties it
+  // while that tab is open, fall back to the grid so the toggle stays valid.
+  useEffect(() => {
+    if (view === "proximity" && !(result?.picks.length ?? 0)) setView("grid");
+  }, [view, result]);
 
   const suggestRef = useRef(suggest);
   suggestRef.current = suggest;
@@ -810,10 +823,15 @@ export function AutoBuildStudio({
               )}
               <Seg
                 value={view}
-                onChange={(value) => setView(value as "grid" | "clusters")}
+                onChange={(value) =>
+                  setView(value as "grid" | "clusters" | "proximity")
+                }
                 options={[
                   { value: "grid", label: "Grid" },
                   { value: "clusters", label: "Clusters" },
+                  ...(picks.length > 0
+                    ? [{ value: "proximity", label: "Proximity" }]
+                    : []),
                 ]}
               />
               {dropped.length > 0 && (
@@ -825,6 +843,39 @@ export function AutoBuildStudio({
                 </span>
               )}
             </div>
+
+            {(result?.stale_tags.length ?? 0) > 0 && (
+              <div style={staleStrip}>
+                <span
+                  style={{ fontSize: 10.5, color: colors.warn, fontWeight: 700 }}
+                >
+                  ⚠ tag no longer exists
+                </span>
+                <span style={{ fontSize: 10.5, color: colors.textMuted }}>
+                  <span style={{ fontFamily: font.mono, color: colors.text }}>
+                    {result?.stale_tags.join(", ")}
+                  </span>{" "}
+                  — deleted from your tags, so it was ignored for this build
+                  (otherwise it would empty the selection). Remove it to keep
+                  the recipe clean.
+                </span>
+                <div style={{ flex: 1 }} />
+                <span
+                  onClick={() => {
+                    const stale = new Set(result?.stale_tags ?? []);
+                    setLockedTags((prev) =>
+                      prev.filter((tag) => !stale.has(normTag(tag))),
+                    );
+                    setExcludeTags((prev) =>
+                      prev.filter((tag) => !stale.has(normTag(tag))),
+                    );
+                  }}
+                  style={clearLink}
+                >
+                  ✕ remove from recipe
+                </span>
+              </div>
+            )}
 
             {swapId != null && (
               <div style={swapStrip}>
@@ -906,15 +957,34 @@ export function AutoBuildStudio({
             )}
 
             <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
-              {view === "grid" ? (
+              {view === "grid" && (
                 <PickGrid picks={picks} handlers={cardHandlers} />
-              ) : (
+              )}
+              {view === "clusters" && (
                 <ClusterView
                   result={result}
                   handlers={cardHandlers}
                   clusterSel={clusterSel}
                   onClusterClick={(id) =>
                     setClusterSel((prev) => (prev === id ? null : id))
+                  }
+                />
+              )}
+              {view === "proximity" && result && (
+                <AutoBuildProximity
+                  picks={picks}
+                  edges={result.proximity.edges}
+                  sim={proxSim}
+                  onSimChange={setProxSim}
+                  hover={proxHover}
+                  onHover={setProxHover}
+                  selId={selId}
+                  onSelect={toggleSelect}
+                  onAutoReplace={(ids) =>
+                    setDropped((prev) => [
+                      ...prev,
+                      ...ids.filter((id) => !prev.includes(id)),
+                    ])
                   }
                 />
               )}
@@ -1610,7 +1680,7 @@ function CompositionPanel({
   onHover: (id: number | null) => void;
   recipe: AutobuildRecipe;
   recomputing: boolean;
-  view: "grid" | "clusters";
+  view: "grid" | "clusters" | "proximity";
   clusterSel: number | null;
   onClusterClick: (id: number) => void;
   selId: number | null;
@@ -2769,6 +2839,16 @@ const replaceStrip = {
   padding: "8px 12px",
   borderBottom: "1px solid #3a2d1d",
   background: "#241d12",
+} as const;
+
+const staleStrip = {
+  flex: "none",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "8px 12px",
+  borderBottom: "1px solid #3a2d1d",
+  background: colors.watermarkAmberBg,
 } as const;
 
 const flagPopover = {

@@ -171,6 +171,7 @@ from src.sqlite_store.tags import (
     tag_usage_counts,
     find_tag_by_name,
     existing_tag_names,
+    existing_normalized_tag_names,
     delete_tag,
     dedupe_tags,
     move_tag,

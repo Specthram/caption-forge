@@ -14,6 +14,7 @@ preview runs synchronously in the request.
 import json
 import re
 import threading
+from dataclasses import replace
 
 from src import (
     autobuild_studio,
@@ -95,6 +96,43 @@ def _recipe_of(params, buckets: dict) -> Recipe:
         kept=tuple(params.kept or ()),
         rebal=bool(params.rebal),
     )
+
+
+def _live_tags(recipe: Recipe) -> tuple:
+    """Drop locked/excluded tags whose tag no longer exists; report them.
+
+    A saved recipe can name a tag the user has since deleted. Left in, a
+    deleted *locked* tag empties the whole build — nothing carries it, so the
+    strict include filter cuts every media and the edited dataset opens
+    blank. This resolves the recipe's tag names against the live vocabulary,
+    keeps only the ones that still exist for filtering, and returns the stale
+    names so the panel can explain why they were ignored.
+
+    Returns
+    -------
+    tuple
+        ``(recipe, stale)`` — the recipe with only live tag filters and the
+        sorted list of normalized names that no longer exist.
+    """
+    named = tuple(recipe.locked_tags) + tuple(recipe.exclude_tags)
+    if not named:
+        return recipe, []
+    live = store.existing_normalized_tag_names(named)
+    stale = sorted({framing.normalize_tag(name) for name in named} - live)
+    if not stale:
+        return recipe, []
+
+    def keep(names) -> tuple:
+        return tuple(
+            name for name in names if framing.normalize_tag(name) in live
+        )
+
+    recipe = replace(
+        recipe,
+        locked_tags=keep(recipe.locked_tags),
+        exclude_tags=keep(recipe.exclude_tags),
+    )
+    return recipe, stale
 
 
 def _library_scope(recipe: Recipe) -> set | None:
@@ -323,9 +361,12 @@ def run_preview(params) -> dict:
     recipe = _recipe_of(params, buckets)
     if recipe.size <= 0:
         return _empty_preview()
+    recipe, stale = _live_tags(recipe)
     reuse = bool(getattr(params, "reuse_pool", False))
     corpus, candidates, picks, meta, tags, pref = _select_for(recipe, reuse)
-    return _assemble(recipe, corpus, candidates, picks, meta, tags, pref)
+    return _assemble(
+        recipe, corpus, candidates, picks, meta, tags, pref, stale
+    )
 
 
 def run_preview_events(params):
@@ -354,6 +395,7 @@ def run_preview_events(params):
     if recipe.size <= 0:
         yield {"result": _empty_preview()}
         return
+    recipe, stale = _live_tags(recipe)
     reuse = bool(getattr(params, "reuse_pool", False))
     corpus, candidates, picks, meta, tags, pref = yield from _emit_stages(
         recipe, event, reuse
@@ -361,7 +403,7 @@ def run_preview_events(params):
     yield event("assemble")
     yield {
         "result": _assemble(
-            recipe, corpus, candidates, picks, meta, tags, pref
+            recipe, corpus, candidates, picks, meta, tags, pref, stale
         )
     }
 
@@ -383,7 +425,7 @@ def _emit_stages(recipe: Recipe, event, reuse: bool = False) -> tuple:
     return outcome
 
 
-def _assemble(recipe, corpus, candidates, picks, meta, tags, pref):
+def _assemble(recipe, corpus, candidates, picks, meta, tags, pref, stale=()):
     """Assemble the preview payload from the selection outcome."""
     by_id = {cand.id: cand for cand in candidates}
     pick_cands = [by_id[mid] for mid in picks if mid in by_id]
@@ -416,9 +458,24 @@ def _assemble(recipe, corpus, candidates, picks, meta, tags, pref):
         "clusters": autobuild_studio.clusters(corpus, pick_cands, recipe),
         "zones": autobuild_studio.uncovered_zones(corpus, candidates, picks),
         "map": _map(corpus, candidates, picks, recipe, cluster),
+        "proximity": _proximity(corpus, picks),
+        "stale_tags": list(stale),
         "dominant_tag": _dominant_tag(picked_cards),
         "semantic_available": _semantic_available(),
         **panel,
+    }
+
+
+def _proximity(corpus, picks) -> dict:
+    """Return the Proximity view's resemblance graph over the picks.
+
+    A sparse cosine-similarity edge list (see
+    :func:`src.autobuild_studio.proximity_edges`); node positions and quality
+    ride the existing pick cards, so only the links are new on the wire.
+    """
+    return {
+        "floor": autobuild_studio.PROXIMITY_FLOOR,
+        "edges": autobuild_studio.proximity_edges(corpus, picks),
     }
 
 
@@ -551,6 +608,11 @@ def _empty_preview() -> dict:
             "points": [],
             "zones": [],
         },
+        "proximity": {
+            "floor": autobuild_studio.PROXIMITY_FLOOR,
+            "edges": [],
+        },
+        "stale_tags": [],
         "dominant_tag": None,
         "semantic_available": _semantic_available(),
         "grade": "—",

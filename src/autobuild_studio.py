@@ -62,6 +62,14 @@ NEAR_DUP_COSINE = dataset_quality.NEAR_DUP_COSINE
 # an uncovered zone of the corpus.
 ZONE_MIN_CANDIDATES = 3
 
+# --- proximity graph ------------------------------------------------------
+# The Proximity view materialises the resemblance links between the picks.
+# Only pairs at or above this cosine floor are sent (kNN-style sparsity);
+# the view then lets the user raise the threshold further, up to just below
+# 1.0. The app-wide near-duplicate line (:data:`NEAR_DUP_COSINE`, 0.92) is
+# the red "near-identical" band inside that range.
+PROXIMITY_FLOOR = 0.70
+
 # A pick is flagged "borderline" when its subject match, once a subject is
 # active, sits within this band of the gate — the triage queue's material.
 FLAG_SUBJECT_MARGIN = 0.12
@@ -708,6 +716,50 @@ def cluster_of(corpus, picks, recipe: Recipe) -> dict:
         for media_id in entry["media_ids"]:
             mapping[media_id] = entry["id"]
     return mapping
+
+
+def proximity_edges(corpus, picks, floor: float = PROXIMITY_FLOOR) -> list:
+    """Return the resemblance links among the picks, as ``[a, b, sim]``.
+
+    Every pair of picked media that both carry a DINOv2 vector and whose
+    cosine similarity reaches ``floor`` yields one edge ``[a, b, sim]`` with
+    ``a < b`` and ``sim`` the cosine rounded to three decimals. The vectors
+    are already unit-normalised (see :func:`src.dataset_compose.build_corpus`),
+    so the cosine is their dot product. The list is sorted for a stable wire
+    payload; picks without a vector simply contribute no edge.
+
+    Parameters
+    ----------
+    corpus : Corpus
+        The session geometry; ``corpus.vectors`` holds the unit vectors.
+    picks : iterable of int
+        The selected media ids.
+    floor : float, optional
+        The minimum cosine an edge must reach to be materialised.
+
+    Returns
+    -------
+    list of list
+        ``[[a, b, sim], ...]`` — the sparse resemblance graph of the picks.
+    """
+    ids = [media_id for media_id in picks if media_id in corpus.vectors]
+    edges = []
+    for index, first in enumerate(ids):
+        vector = corpus.vectors[first]
+        for second in ids[index + 1 :]:
+            cosine = float(vector @ corpus.vectors[second])
+            if cosine >= floor:
+                low, high = (
+                    (first, second)
+                    if first < second
+                    else (
+                        second,
+                        first,
+                    )
+                )
+                edges.append([low, high, round(cosine, 3)])
+    edges.sort()
+    return edges
 
 
 _ZONE_REASONS = {

@@ -78,6 +78,33 @@ def test_keep_required_tags_noop_without_locked():
     assert runner._keep_required_tags(recipe, pool, {}) == pool
 
 
+def test_live_tags_drops_deleted_tags(store_db):
+    """A locked/excluded tag absent from the vocabulary is dropped, reported.
+
+    Without this a saved recipe naming a since-deleted *locked* tag would
+    empty the whole build when the dataset is re-edited.
+    """
+    category = store.create_tag_category("general")
+    store.get_or_create_tag("red_hair", category)
+    recipe = Recipe(
+        locked_tags=("red_hair", "ghost_tag"), exclude_tags=("blur",)
+    )
+    clean, stale = runner._live_tags(recipe)
+    assert clean.locked_tags == ("red_hair",)
+    assert clean.exclude_tags == ()
+    assert stale == ["blur", "ghost_tag"]
+
+
+def test_live_tags_noop_when_all_live(store_db):
+    """A tag that still exists (matched normalized) is kept, nothing stale."""
+    category = store.create_tag_category("general")
+    store.get_or_create_tag("red_hair", category)
+    recipe = Recipe(locked_tags=("Red Hair",))  # normalises to red_hair
+    clean, stale = runner._live_tags(recipe)
+    assert clean is recipe
+    assert stale == []
+
+
 def test_run_preview_events_streams_stages_then_result(monkeypatch):
     """The event stream names each stage in order, then the payload."""
 

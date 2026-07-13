@@ -700,6 +700,22 @@ export interface AutobuildStudioPreview {
     points: AutobuildMapPoint[];
     zones: AutobuildZone[];
   };
+  /**
+   * The Proximity view's resemblance graph: a sparse cosine-similarity edge
+   * list over the picks (``[a, b, sim]`` tuples, ``sim`` ≥ ``floor``). Node
+   * positions and quality ride the pick cards; only the links live here.
+   */
+  proximity: {
+    floor: number;
+    edges: [number, number, number][];
+  };
+  /**
+   * Locked/excluded recipe tags that no longer exist in the vocabulary (a
+   * saved recipe naming a since-deleted tag). The engine ignores them so the
+   * build is not silently emptied; the Studio surfaces them and drops them
+   * from the recipe chips.
+   */
+  stale_tags: string[];
   dominant_tag: { name: string; share: number } | null;
   semantic_available: boolean;
   grade: string;
