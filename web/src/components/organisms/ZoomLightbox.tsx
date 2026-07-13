@@ -67,18 +67,40 @@ export function ZoomLightbox() {
         cursor: "grab",
       }}
     >
-      <img
-        src={zoom.src}
-        alt={zoom.name}
-        draggable={false}
-        style={{
-          maxWidth: "72vmin",
-          maxHeight: "72vmin",
-          transform: `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`,
-          transformOrigin: "center",
-          userSelect: "none",
-        }}
-      />
+      {zoom.isVideo ? (
+        <video
+          src={zoom.src}
+          loop
+          autoPlay
+          muted
+          controls
+          playsInline
+          draggable={false}
+          // Stop the backdrop mousedown from starting a pan when the user
+          // reaches for the scrubber / play controls.
+          onMouseDown={(event) => event.stopPropagation()}
+          style={{
+            maxWidth: "72vmin",
+            maxHeight: "72vmin",
+            transform: `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`,
+            transformOrigin: "center",
+            userSelect: "none",
+          }}
+        />
+      ) : (
+        <img
+          src={zoom.src}
+          alt={zoom.name}
+          draggable={false}
+          style={{
+            maxWidth: "72vmin",
+            maxHeight: "72vmin",
+            transform: `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`,
+            transformOrigin: "center",
+            userSelect: "none",
+          }}
+        />
+      )}
       <div
         style={{
           position: "fixed",

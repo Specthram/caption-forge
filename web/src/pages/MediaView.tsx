@@ -192,7 +192,9 @@ export function MediaView() {
                 card={card}
                 focused={focusKey === card.key}
                 onFocus={() => setFocusKey(card.key)}
-                onZoom={() => openZoom(`/api/media/${card.key}/file`, card.name)}
+                onZoom={() =>
+                  openZoom(`/api/media/${card.key}/file`, card.name, card.is_video)
+                }
                 onToggleFav={() => toggleFav.mutate(card.key)}
               />
             ))}

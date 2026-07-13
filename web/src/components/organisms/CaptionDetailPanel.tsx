@@ -125,7 +125,7 @@ export function CaptionDetailPanel() {
           <img
             src={data.thumb}
             alt={data.name}
-            onClick={() => openZoom(data.file, data.name)}
+            onClick={() => openZoom(data.file, data.name, data.is_video)}
             style={{
               width: "100%",
               borderRadius: 8,

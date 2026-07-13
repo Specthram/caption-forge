@@ -31,6 +31,7 @@ interface ZoomState {
   open: boolean;
   src: string | null;
   name: string;
+  isVideo: boolean;
   scale: number;
   tx: number;
   ty: number;
@@ -198,7 +199,7 @@ interface UiState {
   ) => void;
   closeCrop: () => void;
   setCrop: (partial: Partial<CropState>) => void;
-  openZoom: (src: string, name: string) => void;
+  openZoom: (src: string, name: string, isVideo?: boolean) => void;
   closeZoom: () => void;
   setZoom: (partial: Partial<ZoomState>) => void;
   openCompare: (
@@ -221,6 +222,7 @@ const CLOSED_ZOOM: ZoomState = {
   open: false,
   src: null,
   name: "",
+  isVideo: false,
   scale: 1,
   tx: 0,
   ty: 0,
@@ -374,8 +376,8 @@ export const useUiStore = create<UiState>()(
       closeCrop: () => set({ crop: CLOSED_CROP }),
       setCrop: (partial) =>
         set((state) => ({ crop: { ...state.crop, ...partial } })),
-      openZoom: (src, name) =>
-        set({ zoom: { ...CLOSED_ZOOM, open: true, src, name } }),
+      openZoom: (src, name, isVideo = false) =>
+        set({ zoom: { ...CLOSED_ZOOM, open: true, src, name, isVideo } }),
       closeZoom: () => set({ zoom: CLOSED_ZOOM }),
       setZoom: (partial) =>
         set((state) => ({ zoom: { ...state.zoom, ...partial } })),
