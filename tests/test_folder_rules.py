@@ -1,5 +1,7 @@
 """Tests for the subfolder-mapping engine and its repository."""
 
+import os
+
 from src import folder_rules as fr
 from src import sqlite_store as store
 
@@ -17,16 +19,21 @@ class TestSlugAndChain:
 
     def test_rel_folder_under_root(self):
         """A file's folder is returned relative to the root, ``/``-joined."""
-        rel = fr.rel_folder(r"C:\d\vet\robe\a.png", r"C:\d\vet")
+        # Native separators so the path parses on every OS the app runs on.
+        root = os.path.join(os.sep, "d", "vet")
+        rel = fr.rel_folder(os.path.join(root, "robe", "a.png"), root)
         assert rel == "robe"
 
     def test_rel_folder_root_level(self):
         """A file directly in the root yields the empty rel_path."""
-        assert fr.rel_folder(r"C:\d\vet\a.png", r"C:\d\vet") == ""
+        root = os.path.join(os.sep, "d", "vet")
+        assert fr.rel_folder(os.path.join(root, "a.png"), root) == ""
 
     def test_rel_folder_outside_root(self):
         """A file outside the root degrades to the root, never raises."""
-        assert fr.rel_folder(r"D:\other\a.png", r"C:\d\vet") == ""
+        root = os.path.join(os.sep, "d", "vet")
+        outside = os.path.join(os.sep, "other", "a.png")
+        assert fr.rel_folder(outside, root) == ""
 
 
 class TestExcludeAndRouting:

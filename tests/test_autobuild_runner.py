@@ -91,8 +91,15 @@ def test_run_preview_events_streams_stages_then_result(monkeypatch):
     assert events[-1] == {"result": {"picks": ["ok"]}}
 
 
-def test_run_preview_events_empty_recipe_yields_only_result(monkeypatch):
-    """A size-0 recipe skips the stages and streams the empty payload."""
+def test_run_preview_events_empty_recipe_yields_only_result(
+    monkeypatch, store_db
+):
+    """A size-0 recipe skips the stages and streams the empty payload.
+
+    ``store_db`` supplies a schema'd in-memory database: the empty payload
+    still probes ``_semantic_available`` (a media/embedding read), which must
+    not fall through to the developer's real database.
+    """
     monkeypatch.setattr(runner.config, "load_autobuild_config", lambda: {})
     monkeypatch.setattr(runner, "_recipe_of", lambda _p, _b: Recipe(size=0))
 
