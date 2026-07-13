@@ -25,7 +25,7 @@ every candidate, filters excluded — so a filter change never moves a dot.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -144,7 +144,7 @@ class Zone:
 
 
 @dataclass(frozen=True)
-class Corpus:
+class Corpus:  # pylint: disable=too-many-instance-attributes
     """Everything the composer derives from the dataset and its candidates.
 
     Built once per request from the *unfiltered* pool, so the map layout,
@@ -168,6 +168,10 @@ class Corpus:
         The empty zones of the corpus.
     hash_twins : dict
         ``{media_id: set of media ids}`` sharing a perceptual-hash group.
+    depth_vectors : dict
+        ``{media_id: unit numpy vector}`` — Depth-Anything V2 composition
+        signatures, images only. Empty when the depth index step has not run;
+        the Proximity fusion then falls back to DINOv2 alone.
     """
 
     dataset: list
@@ -177,6 +181,7 @@ class Corpus:
     xy: dict
     zones: tuple
     hash_twins: dict
+    depth_vectors: dict = field(default_factory=dict)
 
 
 def metric_score(item: dict, metric: str) -> float | None:
@@ -281,7 +286,7 @@ def _hash_twins(items) -> dict:
     return twins
 
 
-def build_corpus(dataset, pool, vectors, hashes) -> Corpus:
+def build_corpus(dataset, pool, vectors, hashes, depth_vectors=None) -> Corpus:
     """Derive the stable geometry of one composer session.
 
     Parameters
@@ -295,13 +300,21 @@ def build_corpus(dataset, pool, vectors, hashes) -> Corpus:
     hashes : dict
         ``{media_id: (phash, dhash)}`` of both sets (see
         :func:`src.sqlite_store.media_hashes`).
+    depth_vectors : dict, optional
+        ``{media_id: numpy vector}`` Depth-Anything V2 composition signatures
+        of both sets. ``None`` (or empty) leaves the corpus without a depth
+        signal — the Proximity fusion then falls back to DINOv2 alone.
 
     Returns
     -------
     Corpus
-        The map layout, the empty zones and the hash groups.
+        The map layout, the empty zones, the hash groups and the depth
+        signatures.
     """
     units = {mid: _unit(vector) for mid, vector in vectors.items()}
+    depth_units = {
+        mid: _unit(vector) for mid, vector in (depth_vectors or {}).items()
+    }
     names = {item["id"]: item["name"] for item in list(dataset) + list(pool)}
     ids = [item["id"] for item in list(dataset) + list(pool)]
     xy = _layout(ids, units)
@@ -325,6 +338,7 @@ def build_corpus(dataset, pool, vectors, hashes) -> Corpus:
         xy=xy,
         zones=zones,
         hash_twins=_hash_twins(hashable),
+        depth_vectors=depth_units,
     )
 
 

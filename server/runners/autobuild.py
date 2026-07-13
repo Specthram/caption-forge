@@ -21,6 +21,7 @@ from src import (
     config,
     dataset_compose,
     dataset_quality,
+    depth_embeddings,
     embeddings,
     framing,
     settings,
@@ -249,12 +250,27 @@ def _load_pool(recipe: Recipe) -> tuple:
     return pool, tags, (pref_before, len(pool))
 
 
+def _depth_vectors(ids) -> dict:
+    """Return ``{id: numpy vector}`` Depth-Anything V2 signatures for a pool.
+
+    Empty when the depth index step has not run over the pool: the corpus
+    then carries no composition signal and the Proximity fusion falls back
+    to DINOv2 alone.
+    """
+    return {
+        media_id: depth_embeddings.blob_to_vector(blob)
+        for media_id, blob in store.media_embeddings(
+            depth_embeddings.MODEL_ID, ids
+        ).items()
+    }
+
+
 def _corpus_of_pool(pool: list):
-    """Build the DINOv2 corpus geometry (vectors + hashes + PCA) of a pool."""
+    """Build the corpus geometry (DINOv2 + depth + hashes + PCA) of a pool."""
     ids = [item["id"] for item in pool]
     vectors = _dinov2_vectors(ids)
     return dataset_compose.build_corpus(
-        [], pool, vectors, store.media_hashes(ids)
+        [], pool, vectors, store.media_hashes(ids), _depth_vectors(ids)
     )
 
 
@@ -467,9 +483,9 @@ def _assemble(recipe, corpus, candidates, picks, meta, tags, pref, stale=()):
 
 
 def _proximity(corpus, picks) -> dict:
-    """Return the Proximity view's resemblance graph over the picks.
+    """Return the Proximity view's fused resemblance graph over the picks.
 
-    A sparse cosine-similarity edge list (see
+    A sparse ``[a, b, dino_sim, depth_sim]`` edge list (see
     :func:`src.autobuild_studio.proximity_edges`); node positions and quality
     ride the existing pick cards, so only the links are new on the wire.
     """

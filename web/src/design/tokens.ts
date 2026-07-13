@@ -43,6 +43,9 @@ export const colors = {
   info: "#6fa8dc",
   fav: "#e06c9d",
   greenAlt: "#8bc48a",
+  // Composition (Depth-Anything V2) — the re-skin signal fused into the
+  // auto-builder's Proximity graph and the depth index step's dot.
+  composition: "#5ac7c0",
 
   // Grounding (SigLIP) — its own cool-blue surface, so the grounding card
   // reads as a measurement panel rather than another ember-accented action.
@@ -131,6 +134,8 @@ export function stepColor(key: string): string {
       return colors.info;
     case "embed":
       return colors.accent;
+    case "depth":
+      return colors.composition;
     case "wd14":
       return colors.fav;
     default:

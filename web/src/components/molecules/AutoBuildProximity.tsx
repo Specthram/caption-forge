@@ -1,26 +1,54 @@
 /**
  * The Studio's Proximity view: the resemblance links between every image in
  * the proposed selection, drawn as an interactive similarity graph so the
- * user can spot near-duplicate frames that a LoRA would memorise instead of
+ * user can spot redundant frames that a LoRA would memorise instead of
  * learning from. Nodes are the picks laid out from their DINOv2 projection
  * (lightly de-clumped), edges are real pairwise cosine links above a
- * threshold; red links/rings mark the app-wide near-duplicate line (0.92).
+ * threshold; red links/rings mark the app-wide near-duplicate line (0.92),
+ * blue links plain resemblance.
+ *
+ * A third, fused signal — Depth-Anything V2 composition depth — catches
+ * *re-skins*: pairs with the same composition/pose/framing but a different
+ * style (photo ↔ anime, changed outfit) that DINOv2 rates as far apart yet
+ * are still redundant (the model memorises the shared layout). Each edge
+ * carries both cosines (`dinoS`, `depthS`); the fused link is
+ * `max(dinoS, W·depthS)`. Rather than wire re-skins with long crossing teal
+ * lines, the force-directed layout *pulls* strong re-skin pairs together, so
+ * the teal links stay short and quiet, and light up on hover. DINOv2 still
+ * anchors the layout, so this graph stays aligned with the coverage map.
+ *
  * Hovering isolates a node's links; clicking selects it, then a grey point
  * on the coverage map swaps it out — the same replace flow as Grid/Clusters.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { colors, font } from "../../design/tokens";
 import type { AutobuildPick } from "../../api/types";
 
 // The near-duplicate line, app-wide (src/dataset_quality.NEAR_DUP_COSINE).
 const NEAR_DUP = 0.92;
-// Layout: anchor the nodes to their projection, then de-clump exact overlaps
-// without splitting genuinely-close pairs beyond the link distance.
+
+// Composition fusion (mirrors src/autobuild_studio): the depth cosine is
+// trusted a touch less than DINOv2, and a "strong re-skin" — the pair the
+// layout pulls together — is a fixed, threshold-independent line so the
+// layout never recomputes when the slider moves.
+const COMP_W = 0.95;
+const COMP_STRONG_DEPTH = 0.9;
+const COMP_DINO_FAR = 0.85;
+
+// Layout: anchor the nodes to their projection, de-clump exact overlaps, and
+// — when composition is on — pull strong re-skin pairs together. The anchor
+// pull softens and the relaxation runs longer when composition is on so the
+// attraction has room to move nodes.
 const LAYOUT_ITERATIONS = 70;
+const LAYOUT_ITERATIONS_COMP = 90;
 const ANCHOR_PULL = 0.09;
+const ANCHOR_PULL_COMP = 0.055;
 const REPULSE_RADIUS = 2.6;
 const REPULSE_STRENGTH = 0.45;
+const COMP_ATTRACT_TARGET = 2.2;
+const COMP_ATTRACT_GAIN = 0.11;
+const COMP_ATTRACT_CAP = 0.14;
 const VIEW_W = 100;
 const VIEW_H = 74;
 const CLAMP_X: [number, number] = [4, 96];
@@ -29,6 +57,7 @@ const CLAMP_Y: [number, number] = [4, 70];
 // Colours the handoff fixes outside the shared token set.
 const NODE_STROKE = "#0f1013";
 const RESEMBLE_LINK = "#5e7fa6";
+const COMP_LINK = colors.composition; // #5ac7c0
 const SEL_GLOW = "rgba(232,147,90,0.30)";
 // Cycled colour of each redundant group's dot / member palette.
 const GROUP_PALETTE = [
@@ -39,6 +68,13 @@ const GROUP_PALETTE = [
   "#c58ad0",
   "#5ac7c0",
 ];
+// Re-skin card accents (composition teal, kept apart from the ember cards).
+const RESKIN_BORDER = "rgba(90,199,192,0.4)";
+const RESKIN_BG = "#14201f";
+const RESKIN_KEPT_BORDER = "#2a4a48";
+const RESKIN_REPLACE_BORDER = "rgba(90,199,192,0.25)";
+const RESKIN_BTN_BORDER = "rgba(90,199,192,0.45)";
+const RESKIN_BTN_BG = "rgba(90,199,192,0.10)";
 
 const thumbUrl = (id: number) => `/api/media/${id}/thumb`;
 
@@ -50,6 +86,8 @@ function qColor(score: number | null): string {
   return colors.danger;
 }
 
+type Nature = "near" | "resemble" | "composition";
+
 interface Node {
   id: number;
   name: string;
@@ -58,10 +96,41 @@ interface Node {
   ay: number;
 }
 
+/** A raw pick pair with both fused cosines, before classification. */
+interface Pair {
+  a: number;
+  b: number;
+  dino: number;
+  depth: number;
+}
+
+/** A pair shown at the current threshold, tagged by its carrying signal. */
+interface ShownEdge extends Pair {
+  nature: Nature;
+}
+
 interface Group {
   key: number;
   members: Node[];
   meanSim: number;
+}
+
+/**
+ * Classify one pair at a threshold — appearance first, then composition.
+ * DINOv2 near-dups and resemblance carry regardless of the composition
+ * toggle; a composition (re-skin) edge is exactly a pair DINOv2 did *not*
+ * consider resembling but the depth signal did, and only when the toggle is
+ * on. Returns null when neither signal reaches the threshold.
+ */
+function classify(
+  pair: Pair,
+  sim: number,
+  compOn: boolean,
+): Nature | null {
+  if (pair.dino >= NEAR_DUP) return "near";
+  if (pair.dino >= sim) return "resemble";
+  if (compOn && COMP_W * pair.depth >= sim) return "composition";
+  return null;
 }
 
 export function AutoBuildProximity({
@@ -76,8 +145,8 @@ export function AutoBuildProximity({
   onAutoReplace,
 }: {
   picks: AutobuildPick[];
-  /** The sparse cosine edge list from the preview payload (`[a, b, sim]`). */
-  edges: [number, number, number][];
+  /** The fused edge list: `[a, b, dinoSim, depthSim]` from the payload. */
+  edges: [number, number, number, number][];
   sim: number;
   onSimChange: (value: number) => void;
   hover: number | null;
@@ -86,6 +155,10 @@ export function AutoBuildProximity({
   onSelect: (id: number) => void;
   onAutoReplace: (ids: number[]) => void;
 }) {
+  // The composition signal is opt-in per view: off reverts to pure DINOv2
+  // (no teal links, no re-skin groups, the layout un-pulled).
+  const [compOn, setCompOn] = useState(true);
+
   // Nodes: the picks that carry a projection point. Their anchor is the same
   // DINOv2 2D position the coverage map plots, so the two maps stay aligned.
   const nodes = useMemo<Node[]>(
@@ -114,56 +187,115 @@ export function AutoBuildProximity({
     [nodes],
   );
 
-  // Layout is cached by the set of picked ids — it never recomputes on a
-  // threshold change or a hover, only when the selection itself changes.
-  const layout = useMemo(
-    () => relax(nodes),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [idsKey],
-  );
-
-  // Edges above the current threshold, both endpoints present.
-  const edges = useMemo(
+  // Every payload pair whose endpoints are both present, parsed once.
+  const pairs = useMemo<Pair[]>(
     () =>
-      allEdges.filter(
-        ([a, b, s]) => s >= sim && nodeById.has(a) && nodeById.has(b),
-      ),
-    [allEdges, sim, nodeById],
+      allEdges
+        .filter(([a, b]) => nodeById.has(a) && nodeById.has(b))
+        .map(([a, b, dino, depth]) => ({ a, b, dino, depth })),
+    [allEdges, nodeById],
   );
 
-  // Per-node degree, near-dup degree, and adjacency (over shown edges).
-  const { degree, nearDupDegree, adjacency } = useMemo(() => {
+  // Strong re-skin pairs feed the layout pull. Threshold-independent (raw
+  // cosines), and only when composition is on — so the layout depends on the
+  // picked set and the toggle alone, never on the slider.
+  const strongPairs = useMemo(
+    () =>
+      compOn
+        ? pairs.filter(
+            (pair) =>
+              pair.depth >= COMP_STRONG_DEPTH && pair.dino < COMP_DINO_FAR,
+          )
+        : [],
+    [pairs, compOn],
+  );
+
+  // Layout is cached by the set of picked ids and the composition toggle — it
+  // never recomputes on a threshold change or a hover.
+  const layout = useMemo(
+    () => relax(nodes, strongPairs, compOn),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [idsKey, compOn],
+  );
+
+  // Edges shown at the current threshold, tagged by their carrying signal.
+  const shown = useMemo<ShownEdge[]>(
+    () =>
+      pairs.flatMap((pair) => {
+        const nature = classify(pair, sim, compOn);
+        return nature ? [{ ...pair, nature }] : [];
+      }),
+    [pairs, sim, compOn],
+  );
+
+  // Per-node degree, near-dup degree, re-skin degree and adjacency.
+  const { degree, nearDupDegree, reskinDegree, adjacency } = useMemo(() => {
     const deg = new Map<number, number>();
     const near = new Map<number, number>();
+    const reskin = new Map<number, number>();
     const adj = new Map<number, Set<number>>();
     for (const node of nodes) {
       deg.set(node.id, 0);
       near.set(node.id, 0);
+      reskin.set(node.id, 0);
       adj.set(node.id, new Set());
     }
-    for (const [a, b, s] of edges) {
-      deg.set(a, (deg.get(a) ?? 0) + 1);
-      deg.set(b, (deg.get(b) ?? 0) + 1);
-      adj.get(a)?.add(b);
-      adj.get(b)?.add(a);
-      if (s >= NEAR_DUP) {
-        near.set(a, (near.get(a) ?? 0) + 1);
-        near.set(b, (near.get(b) ?? 0) + 1);
+    for (const edge of shown) {
+      deg.set(edge.a, (deg.get(edge.a) ?? 0) + 1);
+      deg.set(edge.b, (deg.get(edge.b) ?? 0) + 1);
+      adj.get(edge.a)?.add(edge.b);
+      adj.get(edge.b)?.add(edge.a);
+      if (edge.nature === "near") {
+        near.set(edge.a, (near.get(edge.a) ?? 0) + 1);
+        near.set(edge.b, (near.get(edge.b) ?? 0) + 1);
+      }
+      if (edge.nature === "composition") {
+        reskin.set(edge.a, (reskin.get(edge.a) ?? 0) + 1);
+        reskin.set(edge.b, (reskin.get(edge.b) ?? 0) + 1);
       }
     }
-    return { degree: deg, nearDupDegree: near, adjacency: adj };
-  }, [nodes, edges]);
+    return {
+      degree: deg,
+      nearDupDegree: near,
+      reskinDegree: reskin,
+      adjacency: adj,
+    };
+  }, [nodes, shown]);
 
-  // Connected components (union-find) of the above-threshold graph → the
-  // redundant groups (size ≥ 2), each sorted best-quality first.
-  const groups = useMemo(
-    () => components(nodes, edges, nodeById),
-    [nodes, edges, nodeById],
+  // Redundant groups, kept apart so a card never mislabels: appearance groups
+  // over the near + resemble edges (mean DINOv2 similarity), re-skin groups
+  // over the composition edges alone (mean depth similarity).
+  const appearanceGroups = useMemo(
+    () =>
+      components(
+        nodes,
+        shown.filter((edge) => edge.nature !== "composition"),
+        nodeById,
+        (edge) => edge.dino,
+      ),
+    [nodes, shown, nodeById],
+  );
+  const reskinGroups = useMemo(
+    () =>
+      components(
+        nodes,
+        shown.filter((edge) => edge.nature === "composition"),
+        nodeById,
+        (edge) => edge.depth,
+      ),
+    [nodes, shown, nodeById],
   );
 
-  const links = edges.length;
-  const nearDupPairs = edges.filter(([, , s]) => s >= NEAR_DUP).length;
-  const redundant = groups.reduce((sum, g) => sum + g.members.length - 1, 0);
+  const links = shown.length;
+  const nearDupPairs = shown.filter((edge) => edge.nature === "near").length;
+  const compPairs = shown.filter(
+    (edge) => edge.nature === "composition",
+  ).length;
+  const groupsCount = appearanceGroups.length + reskinGroups.length;
+  const redundant = appearanceGroups.reduce(
+    (sum, group) => sum + group.members.length - 1,
+    0,
+  );
 
   const hoveredNeighbors = hover != null ? adjacency.get(hover) : undefined;
 
@@ -188,6 +320,7 @@ export function AutoBuildProximity({
             <span style={simValue}>{sim.toFixed(2)}</span>
           </div>
         </div>
+        <CompToggle on={compOn} onChange={setCompOn} />
         <div style={divider} />
         <Stat value={links} label="links" />
         <Stat
@@ -195,7 +328,12 @@ export function AutoBuildProximity({
           label="near-dup pairs"
           color={nearDupPairs > 0 ? colors.danger : colors.ok}
         />
-        <Stat value={groups.length} label="redundant groups" />
+        <Stat value={groupsCount} label="redundant groups" />
+        <Stat
+          value={compPairs}
+          label="composition pairs"
+          color={compPairs > 0 ? COMP_LINK : colors.textMuted}
+        />
       </div>
 
       {/* ---- advice ---- */}
@@ -206,27 +344,51 @@ export function AutoBuildProximity({
         {redundant > 0
           ? `Pruning ${redundant} redundant image(s) would sharpen the LoRA — near-identical frames get memorised instead of teaching the concept.`
           : "No redundant clusters at this threshold — the selection generalises well."}
+        {compPairs > 0 && (
+          <>
+            {" "}
+            <span style={{ color: COMP_LINK }}>
+              {compPairs} of the links are composition re-skins DINOv2 alone
+              would miss.
+            </span>
+          </>
+        )}
       </div>
 
       {/* ---- graph (preview is a sibling so it can overflow) ---- */}
       <div style={{ position: "relative" }}>
         <div style={graphBox}>
           <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} style={{ display: "block" }}>
-            {edges.map(([a, b, s]) => {
-              const pa = layout.get(a);
-              const pb = layout.get(b);
+            {shown.map((edge) => {
+              const pa = layout.get(edge.a);
+              const pb = layout.get(edge.b);
               if (!pa || !pb) return null;
-              const near = s >= NEAR_DUP;
+              const endpointHover =
+                hover === edge.a || hover === edge.b;
+              if (edge.nature === "composition") {
+                const opacity =
+                  hover == null ? 0.24 : endpointHover ? 0.95 : 0.05;
+                return (
+                  <line
+                    key={`e${edge.a}-${edge.b}`}
+                    x1={pa.x}
+                    y1={pa.y}
+                    x2={pb.x}
+                    y2={pb.y}
+                    stroke={COMP_LINK}
+                    strokeWidth={0.5}
+                    strokeDasharray="1.4 1.2"
+                    opacity={opacity}
+                  />
+                );
+              }
+              const near = edge.nature === "near";
               const base = near ? 0.9 : 0.42;
               const opacity =
-                hover == null
-                  ? base
-                  : hover === a || hover === b
-                    ? base
-                    : 0.05;
+                hover == null ? base : endpointHover ? base : 0.05;
               return (
                 <line
-                  key={`e${a}-${b}`}
+                  key={`e${edge.a}-${edge.b}`}
                   x1={pa.x}
                   y1={pa.y}
                   x2={pb.x}
@@ -244,6 +406,7 @@ export function AutoBuildProximity({
               const active = selId === node.id;
               const hovered = hover === node.id;
               const isNearDup = (nearDupDegree.get(node.id) ?? 0) > 0;
+              const isReskin = (reskinDegree.get(node.id) ?? 0) > 0;
               let radius = 1.5 + Math.min(2.4, deg * 0.4);
               if (active || hovered) radius += 0.8;
               const opacity =
@@ -265,6 +428,7 @@ export function AutoBuildProximity({
                   }
                   onClick={() => onSelect(node.id)}
                 >
+                  {/* Ring priority: selection > near-dup > re-skin. */}
                   {active ? (
                     <circle
                       cx={point.x}
@@ -275,15 +439,25 @@ export function AutoBuildProximity({
                       strokeWidth={0.6}
                       strokeDasharray="1.6 1.2"
                     />
+                  ) : isNearDup ? (
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={radius + 1.1}
+                      fill="none"
+                      stroke={colors.danger}
+                      strokeWidth={0.5}
+                    />
                   ) : (
-                    isNearDup && (
+                    isReskin && (
                       <circle
                         cx={point.x}
                         cy={point.y}
                         r={radius + 1.1}
                         fill="none"
-                        stroke={colors.danger}
+                        stroke={COMP_LINK}
                         strokeWidth={0.5}
+                        strokeDasharray="0.9 0.9"
                       />
                     )
                   )}
@@ -310,6 +484,7 @@ export function AutoBuildProximity({
                 node={node}
                 degree={degree.get(hover) ?? 0}
                 nearDup={(nearDupDegree.get(hover) ?? 0) > 0}
+                reskins={reskinDegree.get(hover) ?? 0}
                 active={selId === hover}
                 point={point}
               />
@@ -320,13 +495,18 @@ export function AutoBuildProximity({
       {/* ---- legend ---- */}
       <div style={legend}>
         node size = number of look-alikes · red ring / red link =
-        near-duplicate (≥ 0.92) · blue link = resemblance · node fill = quality
-        score · hover to preview &amp; isolate a node&apos;s links · click to
-        select it, then swap it on the coverage map →
+        near-duplicate (≥ 0.92) · blue link = resemblance ·{" "}
+        <span style={{ color: COMP_LINK }}>
+          teal dashed link / ring = same composition, different style (re-skin
+          — DINOv2 sees them far; the layout pulls them together)
+        </span>{" "}
+        · node fill = quality score · hover to preview &amp; isolate a
+        node&apos;s links · click to select it, then swap it on the coverage
+        map →
       </div>
 
       {/* ---- redundant groups ---- */}
-      {groups.length > 0 && (
+      {appearanceGroups.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={miniLabel}>
@@ -338,7 +518,7 @@ export function AutoBuildProximity({
             </span>
           </div>
           <div style={groupGrid}>
-            {groups.map((group, index) => (
+            {appearanceGroups.map((group, index) => (
               <GroupCard
                 key={group.key}
                 group={group}
@@ -351,7 +531,93 @@ export function AutoBuildProximity({
           </div>
         </div>
       )}
+
+      {/* ---- composition re-skins (a separate section) ---- */}
+      {reskinGroups.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span style={{ ...miniLabel, color: COMP_LINK }}>
+              ◇ Composition re-skins — same framing, different style
+            </span>
+            <span style={{ ...legend, flex: 1 }}>
+              Depth-Anything V2 · DINOv2 saw these as different — same
+              pose/framing still teaches the LoRA to memorise the layout
+            </span>
+          </div>
+          <div style={groupGrid}>
+            {reskinGroups.map((group) => (
+              <ReskinCard
+                key={group.key}
+                group={group}
+                selId={selId}
+                onSelect={onSelect}
+                onAutoReplace={onAutoReplace}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** The `composition links` pill: teal when on, grey when off. */
+function CompToggle({
+  on,
+  onChange,
+}: {
+  on: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      title="Fuse Depth-Anything V2 composition depth to surface re-skins"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        border: `1px solid ${on ? "rgba(90,199,192,0.5)" : colors.borderControl}`,
+        background: on ? "rgba(90,199,192,0.10)" : "transparent",
+        borderRadius: 7,
+        padding: "6px 9px",
+        cursor: "pointer",
+      }}
+    >
+      <span
+        style={{
+          width: 22,
+          height: 12,
+          borderRadius: 6,
+          background: on ? COMP_LINK : "#2c2f38",
+          position: "relative",
+          transition: "background 0.15s",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 1.5,
+            left: on ? 11.5 : 1.5,
+            width: 9,
+            height: 9,
+            borderRadius: 5,
+            background: "#0f1013",
+            transition: "left 0.15s",
+          }}
+        />
+      </span>
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          color: on ? COMP_LINK : colors.textMuted,
+        }}
+      >
+        composition links
+      </span>
+    </button>
   );
 }
 
@@ -387,12 +653,14 @@ function HoverPreview({
   node,
   degree,
   nearDup,
+  reskins,
   active,
   point,
 }: {
   node: Node;
   degree: number;
   nearDup: boolean;
+  reskins: number;
   active: boolean;
   point: { x: number; y: number };
 }) {
@@ -450,6 +718,11 @@ function HoverPreview({
         Q {node.quality == null ? "—" : node.quality.toFixed(0)} · {degree}{" "}
         look-alike(s)
       </div>
+      {reskins > 0 && (
+        <div style={{ fontFamily: font.mono, fontSize: 9, color: COMP_LINK }}>
+          ◇ {reskins} composition re-skin(s) — same framing, different style
+        </div>
+      )}
       <div style={{ fontFamily: font.mono, fontSize: 9.5, color: role.color }}>
         {role.text}
       </div>
@@ -487,63 +760,16 @@ function GroupCard({
       <div style={{ fontFamily: font.mono, fontSize: 9, color: colors.textFaint }}>
         ~{group.meanSim.toFixed(2)} similarity · keep 1, drop {count - 1}
       </div>
-      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-        {group.members.map((member) => {
-          const isBest = member.id === best.id;
-          const selected = selId === member.id;
-          return (
-            <div
-              key={member.id}
-              onClick={() => onSelect(member.id)}
-              title={member.name}
-              style={{ width: 54, cursor: "pointer" }}
-            >
-              <div
-                style={{
-                  position: "relative",
-                  height: 41,
-                  borderRadius: 5,
-                  overflow: "hidden",
-                  border: `1px solid ${
-                    selected ? colors.accent : isBest ? "#2a4a2e" : "#3a3222"
-                  }`,
-                  boxShadow: selected ? `0 0 0 2px ${SEL_GLOW}` : "none",
-                }}
-              >
-                <img
-                  src={thumbUrl(member.id)}
-                  alt=""
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                  }}
-                />
-                <span
-                  style={{
-                    ...qualityBadge,
-                    color: qColor(member.quality),
-                  }}
-                >
-                  {member.quality == null ? "—" : member.quality.toFixed(0)}
-                </span>
-              </div>
-              <div
-                style={{
-                  fontFamily: font.mono,
-                  fontSize: 7.5,
-                  textAlign: "center",
-                  marginTop: 2,
-                  color: isBest ? colors.ok : colors.warn,
-                }}
-              >
-                {isBest ? "✓ keep" : "⇄ replace"}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <MemberStrip
+        members={group.members}
+        best={best}
+        selId={selId}
+        keptBorder="#2a4a2e"
+        replaceBorder="#3a3222"
+        onSelect={onSelect}
+      />
       <button
+        type="button"
         onClick={() => onAutoReplace(replaceable)}
         style={replaceButton}
       >
@@ -553,17 +779,151 @@ function GroupCard({
   );
 }
 
+/** One composition re-skin card: teal-accented, kept apart from look-alikes. */
+function ReskinCard({
+  group,
+  selId,
+  onSelect,
+  onAutoReplace,
+}: {
+  group: Group;
+  selId: number | null;
+  onSelect: (id: number) => void;
+  onAutoReplace: (ids: number[]) => void;
+}) {
+  const count = group.members.length;
+  const best = group.members[0];
+  const replaceable = group.members.slice(1).map((member) => member.id);
+  return (
+    <div style={reskinCard}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 3,
+            background: COMP_LINK,
+          }}
+        />
+        <span style={{ fontSize: 11.5, fontWeight: 700 }}>
+          {count} re-skins
+        </span>
+      </div>
+      <div style={{ fontFamily: font.mono, fontSize: 9, color: colors.textFaint }}>
+        ~{group.meanSim.toFixed(2)} composition · different style · keep 1,
+        drop {count - 1}
+      </div>
+      <MemberStrip
+        members={group.members}
+        best={best}
+        selId={selId}
+        keptBorder={RESKIN_KEPT_BORDER}
+        replaceBorder={RESKIN_REPLACE_BORDER}
+        onSelect={onSelect}
+      />
+      <button
+        type="button"
+        onClick={() => onAutoReplace(replaceable)}
+        style={reskinButton}
+      >
+        ⇄ Auto-replace {count - 1} re-skin(s)
+      </button>
+    </div>
+  );
+}
+
+/** The keep/replace thumbnail strip shared by both group cards. */
+function MemberStrip({
+  members,
+  best,
+  selId,
+  keptBorder,
+  replaceBorder,
+  onSelect,
+}: {
+  members: Node[];
+  best: Node;
+  selId: number | null;
+  keptBorder: string;
+  replaceBorder: string;
+  onSelect: (id: number) => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+      {members.map((member) => {
+        const isBest = member.id === best.id;
+        const selected = selId === member.id;
+        return (
+          <div
+            key={member.id}
+            onClick={() => onSelect(member.id)}
+            title={member.name}
+            style={{ width: 54, cursor: "pointer" }}
+          >
+            <div
+              style={{
+                position: "relative",
+                height: 41,
+                borderRadius: 5,
+                overflow: "hidden",
+                border: `1px solid ${
+                  selected ? colors.accent : isBest ? keptBorder : replaceBorder
+                }`,
+                boxShadow: selected ? `0 0 0 2px ${SEL_GLOW}` : "none",
+              }}
+            >
+              <img
+                src={thumbUrl(member.id)}
+                alt=""
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+              <span
+                style={{ ...qualityBadge, color: qColor(member.quality) }}
+              >
+                {member.quality == null ? "—" : member.quality.toFixed(0)}
+              </span>
+            </div>
+            <div
+              style={{
+                fontFamily: font.mono,
+                fontSize: 7.5,
+                textAlign: "center",
+                marginTop: 2,
+                color: isBest ? colors.ok : colors.warn,
+              }}
+            >
+              {isBest ? "✓ keep" : "⇄ replace"}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // --- geometry -------------------------------------------------------------
 
-/** Relax the node layout: anchor spring + short-range repulsion. */
-function relax(nodes: Node[]): Map<number, { x: number; y: number }> {
+/**
+ * Relax the node layout: anchor spring + short-range repulsion, plus — when
+ * composition is on — an attraction along strong re-skin pairs so they
+ * cluster instead of being wired by long crossing lines. The anchor softens
+ * when composition is on so the pull has room to move nodes.
+ */
+function relax(
+  nodes: Node[],
+  strongPairs: Pair[],
+  compOn: boolean,
+): Map<number, { x: number; y: number }> {
   const pos = nodes.map((node) => ({ x: node.ax, y: node.ay }));
-  for (let iter = 0; iter < LAYOUT_ITERATIONS; iter++) {
+  const index = new Map(nodes.map((node, i) => [node.id, i]));
+  const anchor = compOn ? ANCHOR_PULL_COMP : ANCHOR_PULL;
+  const iterations = compOn ? LAYOUT_ITERATIONS_COMP : LAYOUT_ITERATIONS;
+  for (let iter = 0; iter < iterations; iter++) {
     const fx = new Array(nodes.length).fill(0);
     const fy = new Array(nodes.length).fill(0);
     for (let i = 0; i < nodes.length; i++) {
-      fx[i] += (nodes[i].ax - pos[i].x) * ANCHOR_PULL;
-      fy[i] += (nodes[i].ay - pos[i].y) * ANCHOR_PULL;
+      fx[i] += (nodes[i].ax - pos[i].x) * anchor;
+      fy[i] += (nodes[i].ay - pos[i].y) * anchor;
     }
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
@@ -583,17 +943,40 @@ function relax(nodes: Node[]): Map<number, { x: number; y: number }> {
       pos[i].x = clamp(pos[i].x + fx[i], CLAMP_X[0], CLAMP_X[1]);
       pos[i].y = clamp(pos[i].y + fy[i], CLAMP_Y[0], CLAMP_Y[1]);
     }
+    // Pull each strong re-skin pair together while they sit far apart.
+    for (const pair of strongPairs) {
+      const ia = index.get(pair.a);
+      const ib = index.get(pair.b);
+      if (ia == null || ib == null) continue;
+      const dx = pos[ib].x - pos[ia].x;
+      const dy = pos[ib].y - pos[ia].y;
+      const d = Math.hypot(dx, dy) || 0.001;
+      if (d <= COMP_ATTRACT_TARGET) continue;
+      const f = Math.min(
+        COMP_ATTRACT_CAP,
+        ((d - COMP_ATTRACT_TARGET) / d) * COMP_ATTRACT_GAIN,
+      );
+      pos[ia].x += dx * f;
+      pos[ia].y += dy * f;
+      pos[ib].x -= dx * f;
+      pos[ib].y -= dy * f;
+    }
   }
   const map = new Map<number, { x: number; y: number }>();
-  nodes.forEach((node, index) => map.set(node.id, pos[index]));
+  nodes.forEach((node, i) => map.set(node.id, pos[i]));
   return map;
 }
 
-/** Connected components of size ≥ 2, each sorted by quality descending. */
+/**
+ * Connected components of size ≥ 2 over one edge set, each sorted by quality
+ * descending; `meanSim` is the mean of `valueOf` over the group's intra
+ * edges (DINOv2 for appearance groups, depth for re-skin groups).
+ */
 function components(
   nodes: Node[],
-  edges: [number, number, number][],
+  edges: ShownEdge[],
   nodeById: Map<number, Node>,
+  valueOf: (edge: ShownEdge) => number,
 ): Group[] {
   const parent = new Map<number, number>();
   for (const node of nodes) parent.set(node.id, node.id);
@@ -608,9 +991,9 @@ function components(
     }
     return root;
   };
-  for (const [a, b] of edges) {
-    const ra = find(a);
-    const rb = find(b);
+  for (const edge of edges) {
+    const ra = find(edge.a);
+    const rb = find(edge.b);
     if (ra !== rb) parent.set(ra, rb);
   }
   const buckets = new Map<number, number[]>();
@@ -628,9 +1011,11 @@ function components(
       .filter((node): node is Node => Boolean(node))
       .sort((a, b) => (b.quality ?? -1) - (a.quality ?? -1));
     const idSet = new Set(ids);
-    const intra = edges.filter(([a, b]) => idSet.has(a) && idSet.has(b));
+    const intra = edges.filter(
+      (edge) => idSet.has(edge.a) && idSet.has(edge.b),
+    );
     const meanSim = intra.length
-      ? intra.reduce((sum, [, , s]) => sum + s, 0) / intra.length
+      ? intra.reduce((sum, edge) => sum + valueOf(edge), 0) / intra.length
       : 0;
     groups.push({ key: root, members, meanSim });
   }
@@ -751,6 +1136,12 @@ const groupCard = {
   gap: 8,
 } as const;
 
+const reskinCard = {
+  ...groupCard,
+  border: `1px solid ${RESKIN_BORDER}`,
+  background: RESKIN_BG,
+} as const;
+
 const qualityBadge = {
   position: "absolute",
   top: 2,
@@ -767,6 +1158,17 @@ const replaceButton = {
   border: `1px solid ${colors.accentBorder}`,
   background: colors.accentTintAlt,
   color: colors.accent,
+  borderRadius: 6,
+  padding: "6px 8px",
+  fontSize: 10.5,
+  cursor: "pointer",
+} as const;
+
+const reskinButton = {
+  width: "100%",
+  border: `1px solid ${RESKIN_BTN_BORDER}`,
+  background: RESKIN_BTN_BG,
+  color: COMP_LINK,
   borderRadius: 6,
   padding: "6px 8px",
   fontSize: 10.5,

@@ -70,6 +70,13 @@ ZONE_MIN_CANDIDATES = 3
 # the red "near-identical" band inside that range.
 PROXIMITY_FLOOR = 0.70
 
+# The composition (depth) similarity is fused with the DINOv2 cosine as
+# ``max(dinoS, COMP_W · depthS)`` — depth is trusted a touch less than the
+# appearance signal, so its weight is just under 1. A pair reaches the
+# Proximity floor (and is materialised) on either signal, which is how a
+# re-skin — far in DINOv2, close in composition — becomes a visible edge.
+COMP_W = 0.95
+
 # A pick is flagged "borderline" when its subject match, once a subject is
 # active, sits within this band of the gate — the triage queue's material.
 FLAG_SUBJECT_MARGIN = 0.12
@@ -719,45 +726,57 @@ def cluster_of(corpus, picks, recipe: Recipe) -> dict:
 
 
 def proximity_edges(corpus, picks, floor: float = PROXIMITY_FLOOR) -> list:
-    """Return the resemblance links among the picks, as ``[a, b, sim]``.
+    """Return the fused resemblance links among the picks.
 
-    Every pair of picked media that both carry a DINOv2 vector and whose
-    cosine similarity reaches ``floor`` yields one edge ``[a, b, sim]`` with
-    ``a < b`` and ``sim`` the cosine rounded to three decimals. The vectors
-    are already unit-normalised (see :func:`src.dataset_compose.build_corpus`),
-    so the cosine is their dot product. The list is sorted for a stable wire
-    payload; picks without a vector simply contribute no edge.
+    Every pair of picked media that both carry a DINOv2 vector yields an edge
+    ``[a, b, dino_sim, depth_sim]`` (``a < b``, both cosines rounded to three
+    decimals) whenever the *fused* similarity ``max(dino_sim, COMP_W ·
+    depth_sim)`` reaches ``floor``. ``dino_sim`` is the DINOv2 appearance
+    cosine; ``depth_sim`` the Depth-Anything V2 composition cosine, or ``0.0``
+    when either endpoint lacks a depth signature. Materialising on the fused
+    value is what lets a re-skin — far in DINOv2, close in composition — cross
+    the floor and reach the front, which then classifies each edge by the
+    signal that carries it (appearance first) and can raise the threshold or
+    toggle the composition signal off client-side. The vectors are already
+    unit-normalised (see :func:`src.dataset_compose.build_corpus`), so each
+    cosine is a dot product. The list is sorted for a stable wire payload;
+    picks without a DINOv2 vector contribute no edge.
 
     Parameters
     ----------
     corpus : Corpus
-        The session geometry; ``corpus.vectors`` holds the unit vectors.
+        The session geometry; ``corpus.vectors`` holds the DINOv2 unit
+        vectors and ``corpus.depth_vectors`` the composition ones.
     picks : iterable of int
         The selected media ids.
     floor : float, optional
-        The minimum cosine an edge must reach to be materialised.
+        The minimum *fused* similarity an edge must reach to be materialised.
 
     Returns
     -------
     list of list
-        ``[[a, b, sim], ...]`` — the sparse resemblance graph of the picks.
+        ``[[a, b, dino_sim, depth_sim], ...]`` — the sparse fused graph of the
+        picks.
     """
     ids = [media_id for media_id in picks if media_id in corpus.vectors]
+    depth = corpus.depth_vectors
     edges = []
     for index, first in enumerate(ids):
         vector = corpus.vectors[first]
+        first_depth = depth.get(first)
         for second in ids[index + 1 :]:
-            cosine = float(vector @ corpus.vectors[second])
-            if cosine >= floor:
+            dino = float(vector @ corpus.vectors[second])
+            second_depth = depth.get(second)
+            comp = (
+                float(first_depth @ second_depth)
+                if first_depth is not None and second_depth is not None
+                else 0.0
+            )
+            if max(dino, COMP_W * comp) >= floor:
                 low, high = (
-                    (first, second)
-                    if first < second
-                    else (
-                        second,
-                        first,
-                    )
+                    (first, second) if first < second else (second, first)
                 )
-                edges.append([low, high, round(cosine, 3)])
+                edges.append([low, high, round(dino, 3), round(comp, 3)])
     edges.sort()
     return edges
 

@@ -624,6 +624,10 @@ export interface AutobuildStudioConfig {
   libraries: { id: number; name: string }[];
   unhashed: number;
   unembedded: number;
+  /** Live images with no Depth-Anything V2 composition signature yet. */
+  undepthed: number;
+  /** Whether the composition (depth) index step runs on this machine. */
+  depth_enabled: boolean;
 }
 
 /** One reason chip shown under a pick's name (icon + short value + tip). */
@@ -701,13 +705,16 @@ export interface AutobuildStudioPreview {
     zones: AutobuildZone[];
   };
   /**
-   * The Proximity view's resemblance graph: a sparse cosine-similarity edge
-   * list over the picks (``[a, b, sim]`` tuples, ``sim`` ≥ ``floor``). Node
-   * positions and quality ride the pick cards; only the links live here.
+   * The Proximity view's fused resemblance graph over the picks: a sparse
+   * edge list of `[a, b, dinoSim, depthSim]` tuples, materialised whenever
+   * the fused `max(dinoSim, W·depthSim)` reaches `floor`. `dinoSim` is the
+   * DINOv2 appearance cosine, `depthSim` the Depth-Anything V2 composition
+   * cosine (0 when either endpoint lacks a depth signature). Node positions
+   * and quality ride the pick cards; only the links live here.
    */
   proximity: {
     floor: number;
-    edges: [number, number, number][];
+    edges: [number, number, number, number][];
   };
   /**
    * Locked/excluded recipe tags that no longer exist in the vocabulary (a

@@ -773,6 +773,15 @@ export function AutoBuildStudio({
               </div>
             )}
 
+            {config.data?.depth_enabled &&
+              (config.data?.undepthed ?? 0) > 0 && (
+                <div style={depthNote}>
+                  ◇ {config.data.undepthed} media have no composition depth yet
+                  — run the Composition index (Libraries → Index) for the full
+                  re-skin signal; fusion falls back to DINOv2 alone until then.
+                </div>
+              )}
+
             <div style={{ flex: 1 }} />
             {dirty && !recomputing && (
               <div style={dirtyNote}>
@@ -2470,6 +2479,15 @@ const indexNote = {
   lineHeight: 1.4,
   borderTop: `1px solid ${colors.border}`,
   paddingTop: 12,
+} as const;
+
+// The composition (depth) advice: a soft, opt-in teal notice — depth
+// sharpens the re-skin signal but is never required (DINOv2 is the
+// fallback), so it must not read as the blocking amber warning above.
+const depthNote = {
+  fontSize: 10.5,
+  color: colors.composition,
+  lineHeight: 1.4,
 } as const;
 
 const toolbar = {

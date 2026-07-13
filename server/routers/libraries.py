@@ -15,8 +15,8 @@ from server.schemas import (
     MergeBody,
     RecursiveBody,
 )
-from src import embeddings, fs_browse, index_steps, lookalike, quality
-from src import settings
+from src import depth_embeddings, embeddings, fs_browse, index_steps
+from src import lookalike, quality, settings
 from src import sqlite_store as store
 from src import tagger, thumbnails
 from src.media import is_video_file
@@ -253,6 +253,12 @@ def _step_counts(library_id, cached: set, metrics) -> dict:
         index_steps.EMBED: {
             "done": store.count_media_with_embedding(
                 embeddings.MODEL_ID, library_id
+            ),
+            "total": images,
+        },
+        index_steps.DEPTH: {
+            "done": store.count_media_with_embedding(
+                depth_embeddings.MODEL_ID, library_id
             ),
             "total": images,
         },
