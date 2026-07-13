@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAddTriggerword,
+  useAutobuildRecipe,
   useCaptionScoreReport,
   useCreateDataset,
   useDatasetMedia,
@@ -18,6 +19,7 @@ import {
   useTriggerwords,
   useUpdateDataset,
 } from "../api/hooks";
+import type { AutobuildRecipe } from "../api/hooks";
 import type { MediaGridCard } from "../api/types";
 import { colors, font, qualityColor } from "../design/tokens";
 import { useUiStore } from "../store/uiStore";
@@ -118,6 +120,14 @@ export function DatasetsView() {
   // incidental close — backdrop, ✕, Esc — keeps its in-progress recipe.
   // Only Cancel (or creating the dataset) resets it.
   const [autoMounted, setAutoMounted] = useState(false);
+  // Re-editing a saved dataset in the Studio: the target it prefills from,
+  // and a nonce the Studio watches to run its one-shot prefill each open.
+  const [editTarget, setEditTarget] = useState<{
+    id: number;
+    recipe: AutobuildRecipe;
+    name: string;
+  } | null>(null);
+  const [studioNonce, setStudioNonce] = useState(0);
   // Tab, page and focus are restored after a refresh, so they live in the
   // store. Switching dataset resets them (see uiStore.setDataset).
   const { tab, page, focusKey } = useUiStore((state) => state.datasetsView);
@@ -176,12 +186,27 @@ export function DatasetsView() {
   }, [jobs, client]);
 
   const active = rows?.find((d) => d.id === activeId);
+  // The Studio recipe of the active dataset, if it was built there — the
+  // "Edit in builder" button only shows when one exists to reopen.
+  const activeRecipe = useAutobuildRecipe(active?.id ?? null);
+  const editableRecipe = activeRecipe.data?.recipe ?? null;
   const media = useDatasetMedia(
     activeId,
     (page - 1) * PAGE,
     PAGE,
     qualityMetric,
   );
+
+  // Open the Studio for a fresh build (null) or to re-edit a saved dataset.
+  // Bumping the nonce drives the Studio's one-shot prefill on this open.
+  const openStudio = (
+    target: { id: number; recipe: AutobuildRecipe; name: string } | null,
+  ) => {
+    setEditTarget(target);
+    setStudioNonce((value) => value + 1);
+    setAutoMounted(true);
+    setAutoOpen(true);
+  };
   const total = media.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE));
 
@@ -278,10 +303,7 @@ export function DatasetsView() {
               background: colors.accentTintAlt,
               color: colors.accent,
             }}
-            onClick={() => {
-              setAutoMounted(true);
-              setAutoOpen(true);
-            }}
+            onClick={() => openStudio(null)}
           >
             ⚙ Auto-build a dataset…
           </Button>
@@ -315,6 +337,19 @@ export function DatasetsView() {
                   {active.count} media · linked, never copied
                 </div>
               </div>
+              {editableRecipe && (
+                <Button
+                  onClick={() =>
+                    openStudio({
+                      id: active.id,
+                      recipe: editableRecipe,
+                      name: active.name,
+                    })
+                  }
+                >
+                  ✎ Edit in builder
+                </Button>
+              )}
               <Button variant="accent" onClick={() => setAddOpen(true)}>
                 + Add media from library
               </Button>
@@ -471,6 +506,10 @@ export function DatasetsView() {
         <AutoBuildStudio
           open={autoOpen}
           onClose={() => setAutoOpen(false)}
+          editId={editTarget?.id ?? null}
+          initialRecipe={editTarget?.recipe ?? null}
+          initialName={editTarget?.name ?? ""}
+          nonce={studioNonce}
         />
       )}
     </div>

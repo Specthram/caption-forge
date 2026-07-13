@@ -13,6 +13,7 @@ preview runs synchronously in the request.
 
 import json
 import re
+import threading
 
 from src import (
     autobuild_studio,
@@ -177,6 +178,48 @@ def _dinov2_vectors(ids) -> dict:
     }
 
 
+# --- pool/geometry reuse across pick edits -------------------------------
+# The pool read, the DINOv2 gather and the PCA are the slow part of a
+# preview, and they depend only on the recipe's *scope* (type, metric,
+# libraries, tag filters) — never on the manual pick edits (drop / force /
+# keep / rebalance) that fire a recompute far more often than a knob change.
+# A single-entry memo lets a pick edit reuse the last build's pool, corpus
+# and per-query SigLIP relevance instead of rereading the whole library. A
+# fresh Build recomputes and refills it, so index/quality changes still land.
+_POOL_MEMO_LOCK = threading.Lock()
+_POOL_MEMO: dict = {}
+
+
+def _pool_fingerprint(recipe: Recipe) -> tuple:
+    """Identity of a recipe's pool-and-geometry work (its scope only)."""
+    return (
+        recipe.media_type,
+        recipe.metric,
+        tuple(sorted(recipe.library_ids)),
+        tuple(sorted(recipe.exclude_tags)),
+        tuple(sorted(recipe.locked_tags)),
+    )
+
+
+def _load_pool(recipe: Recipe) -> tuple:
+    """Read and tag-filter the pool. Returns ``(pool, tags, pref)``."""
+    pool = _pool_of(recipe)
+    tags = store.tags_for_media_bulk([item["id"] for item in pool])
+    pref_before = len(pool)
+    pool = _drop_excluded_tags(recipe, pool, tags)
+    pool = _keep_required_tags(recipe, pool, tags)
+    return pool, tags, (pref_before, len(pool))
+
+
+def _corpus_of_pool(pool: list):
+    """Build the DINOv2 corpus geometry (vectors + hashes + PCA) of a pool."""
+    ids = [item["id"] for item in pool]
+    vectors = _dinov2_vectors(ids)
+    return dataset_compose.build_corpus(
+        [], pool, vectors, store.media_hashes(ids)
+    )
+
+
 def _semantic_relevance(query: str, ids) -> dict | None:
     """Return ``{id: cosine}`` of a typed query, or None when unavailable."""
     if not query.strip():
@@ -197,7 +240,7 @@ def _semantic_relevance(query: str, ids) -> dict | None:
     )
 
 
-def _select_stages(recipe: Recipe):
+def _select_stages(recipe: Recipe, reuse: bool = False):
     """Run pool → corpus → prepare → select, yielding each stage key.
 
     A generator form of :func:`_select_for`: it yields the key of a stage
@@ -205,38 +248,65 @@ def _select_stages(recipe: Recipe):
     and returns ``(corpus, candidates, picks, meta, tags, pref)`` on
     exhaustion (``StopIteration.value``); ``pref`` is the ``(before, after)``
     tag pre-filter count.
+
+    With ``reuse`` set and a matching scope, the pool, corpus and cached
+    per-query SigLIP relevance come from the memo, so a pick edit reruns
+    only ``prepare`` and ``select``; the pool/vectors stages then flash by.
     """
+    fingerprint = _pool_fingerprint(recipe)
+    with _POOL_MEMO_LOCK:
+        hit = (
+            _POOL_MEMO
+            if reuse and _POOL_MEMO.get("key") == fingerprint
+            else None
+        )
+        pool = hit["pool"] if hit else None
+        tags = hit["tags"] if hit else None
+        corpus = hit["corpus"] if hit else None
+        pref = hit["pref"] if hit else None
+        relevance_by_q = dict(hit["relevance"]) if hit else {}
+
     yield "pool"
-    pool = _pool_of(recipe)
-    tags = store.tags_for_media_bulk([item["id"] for item in pool])
-    pref_before = len(pool)
-    pool = _drop_excluded_tags(recipe, pool, tags)
-    pool = _keep_required_tags(recipe, pool, tags)
-    pref = (pref_before, len(pool))
+    if pool is None:
+        pool, tags, pref = _load_pool(recipe)
+        relevance_by_q = {}
     ids = [item["id"] for item in pool]
     yield "vectors"
-    vectors = _dinov2_vectors(ids)
-    corpus = dataset_compose.build_corpus(
-        [], pool, vectors, store.media_hashes(ids)
-    )
+    if corpus is None:
+        corpus = _corpus_of_pool(pool)
     yield "semantic"
-    relevance = _semantic_relevance(recipe.semantic_q, ids)
+    query = recipe.semantic_q.strip()
+    if query in relevance_by_q:
+        relevance = relevance_by_q[query]
+    else:
+        relevance = _semantic_relevance(recipe.semantic_q, ids)
+        relevance_by_q[query] = relevance
     yield "select"
     candidates = autobuild_studio.prepare(
         recipe, pool, tags, corpus.vectors, relevance
     )
     picks, meta = autobuild_studio.select(corpus, candidates, recipe)
+    with _POOL_MEMO_LOCK:
+        _POOL_MEMO.clear()
+        _POOL_MEMO.update(
+            key=fingerprint,
+            pool=pool,
+            tags=tags,
+            corpus=corpus,
+            pref=pref,
+            relevance=relevance_by_q,
+        )
     return corpus, candidates, picks, meta, tags, pref
 
 
-def _select_for(recipe: Recipe) -> tuple:
+def _select_for(recipe: Recipe, reuse: bool = False) -> tuple:
     """Run the pool → corpus → prepare → select pipeline for a recipe.
 
     The shared core of the live preview and the living-dataset upgrades:
     returns ``(corpus, candidates, picks, meta, tags, pref)``. Drives
     :func:`_select_stages` to completion, ignoring the stage keys.
     """
-    stages = _select_stages(recipe)
+    stages = _select_stages(recipe, reuse)
     outcome: tuple = ()
     try:
         while True:
@@ -253,7 +323,8 @@ def run_preview(params) -> dict:
     recipe = _recipe_of(params, buckets)
     if recipe.size <= 0:
         return _empty_preview()
-    corpus, candidates, picks, meta, tags, pref = _select_for(recipe)
+    reuse = bool(getattr(params, "reuse_pool", False))
+    corpus, candidates, picks, meta, tags, pref = _select_for(recipe, reuse)
     return _assemble(recipe, corpus, candidates, picks, meta, tags, pref)
 
 
@@ -283,8 +354,9 @@ def run_preview_events(params):
     if recipe.size <= 0:
         yield {"result": _empty_preview()}
         return
+    reuse = bool(getattr(params, "reuse_pool", False))
     corpus, candidates, picks, meta, tags, pref = yield from _emit_stages(
-        recipe, event
+        recipe, event, reuse
     )
     yield event("assemble")
     yield {
@@ -294,14 +366,14 @@ def run_preview_events(params):
     }
 
 
-def _emit_stages(recipe: Recipe, event) -> tuple:
+def _emit_stages(recipe: Recipe, event, reuse: bool = False) -> tuple:
     """Yield each select stage as an event; return the select outcome.
 
     ``event`` maps a stage key to its wire event. Used with ``yield from``
     so the caller receives the ``(corpus, candidates, picks, meta, tags)``
     return value while the stage events stream through.
     """
-    stages = _select_stages(recipe)
+    stages = _select_stages(recipe, reuse)
     outcome: tuple = ()
     try:
         while True:
@@ -753,6 +825,39 @@ def create(name: str, selection: list[int], recipe: dict | None) -> int:
         On an empty/duplicate name (propagated from the store).
     """
     dataset_id = store.create_dataset(name)
+    store.add_media_ids_to_dataset(dataset_id, selection)
+    if recipe is not None:
+        store.save_autobuild_recipe(
+            dataset_id, json.dumps(recipe), bool(recipe.get("live", True))
+        )
+    return dataset_id
+
+
+def get_recipe(dataset_id: int) -> dict:
+    """Return a dataset's stored Studio recipe for re-editing.
+
+    ``{"recipe": <blob or None>, "live": bool}`` — ``recipe`` is None when
+    the dataset was not built by the Studio (nothing to reopen).
+    """
+    stored = store.get_autobuild_recipe(dataset_id)
+    if stored is None:
+        return {"recipe": None, "live": False}
+    return {"recipe": stored["recipe"], "live": stored["live"]}
+
+
+def update(dataset_id: int, selection: list[int], recipe: dict | None) -> int:
+    """Replace a dataset's media with a Studio selection; re-store its recipe.
+
+    The re-edit's "overwrite" save: members absent from ``selection`` are
+    unlinked (their files and captions are left intact), the selection is
+    linked, and the recipe replaces the stored one. The dataset's id and
+    name are untouched.
+    """
+    keep = set(selection)
+    current = {item["id"] for item in store.media_in_dataset(dataset_id)}
+    stale = [media_id for media_id in current if media_id not in keep]
+    if stale:
+        store.remove_media_ids_from_dataset(dataset_id, stale)
     store.add_media_ids_to_dataset(dataset_id, selection)
     if recipe is not None:
         store.save_autobuild_recipe(

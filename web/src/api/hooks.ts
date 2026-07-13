@@ -1302,6 +1302,7 @@ export function useAutobuildPreviewStream() {
     async (
       recipe: AutobuildRecipe,
       onResult: (result: AutobuildStudioPreview) => void,
+      reusePool = false,
     ) => {
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -1312,7 +1313,7 @@ export function useAutobuildPreviewStream() {
         const response = await fetch("/api/autobuild/preview-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(recipe),
+          body: JSON.stringify({ ...recipe, reuse_pool: reusePool }),
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {
@@ -1425,6 +1426,48 @@ export function useAutobuildCreate() {
       recipe: AutobuildRecipe;
     }) => api.post<{ id: number }>("/autobuild/create", vars),
     onSuccess: invalidate,
+  });
+}
+
+/** A dataset's stored Studio recipe, or ``null`` when it was not built there. */
+export interface StoredAutobuildRecipe {
+  recipe: AutobuildRecipe | null;
+  live: boolean;
+}
+
+/**
+ * The Studio recipe a dataset was built from — the source for reopening it
+ * in the Studio to edit again. ``recipe`` is null for hand-made datasets.
+ */
+export function useAutobuildRecipe(datasetId: number | null) {
+  return useQuery({
+    queryKey: ["autobuild-recipe", datasetId],
+    queryFn: () =>
+      api.get<StoredAutobuildRecipe>(`/autobuild/recipe/${datasetId}`),
+    enabled: datasetId != null,
+  });
+}
+
+/** Overwrite an existing dataset's media (and recipe) from a Studio edit. */
+export function useAutobuildUpdate() {
+  const invalidate = useDatasetsInvalidator();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      datasetId: number;
+      selection: number[];
+      recipe: AutobuildRecipe;
+    }) =>
+      api.post<{ id: number }>(`/autobuild/update/${vars.datasetId}`, {
+        selection: vars.selection,
+        recipe: vars.recipe,
+      }),
+    onSuccess: () => {
+      invalidate();
+      client.invalidateQueries({ queryKey: ["dataset-media"] });
+      client.invalidateQueries({ queryKey: ["autobuild-upgrades"] });
+      client.invalidateQueries({ queryKey: ["autobuild-recipe"] });
+    },
   });
 }
 

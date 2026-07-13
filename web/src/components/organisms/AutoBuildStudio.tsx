@@ -19,6 +19,7 @@ import {
   useAutobuildNeighbors,
   useAutobuildPreviewStream,
   useAutobuildSuggestTags,
+  useAutobuildUpdate,
   useLibraryGrid,
   useReleaseAutobuildModel,
 } from "../../api/hooks";
@@ -72,14 +73,27 @@ function bandColor(score: number | null | undefined): string {
 export function AutoBuildStudio({
   open,
   onClose,
+  editId = null,
+  initialRecipe = null,
+  initialName = "",
+  nonce = 0,
 }: {
   open: boolean;
   onClose: () => void;
+  /** Dataset being re-edited, or null for a fresh build. */
+  editId?: number | null;
+  /** Its stored recipe, prefilled into the knobs when re-editing. */
+  initialRecipe?: AutobuildRecipe | null;
+  /** Its name, prefilled for the overwrite/"save as new" actions. */
+  initialName?: string;
+  /** Bumped by the opener each time; drives a one-shot prefill on re-edit. */
+  nonce?: number;
 }) {
   const config = useAutobuildConfig();
   const preview = useAutobuildPreviewStream();
   const suggest = useAutobuildSuggestTags();
   const create = useAutobuildCreate();
+  const update = useAutobuildUpdate();
   const release = useReleaseAutobuildModel();
   const releaseRef = useRef(release);
   releaseRef.current = release;
@@ -115,6 +129,9 @@ export function AutoBuildStudio({
   // note lights when the live knobs drift from it (edits do not count).
   const [builtSnapshot, setBuiltSnapshot] = useState<string | null>(null);
   const [triageOpen, setTriageOpen] = useState(false);
+  // A re-edit prefills the knobs, then asks for a Build on the next commit
+  // (once ``recipeRef`` reflects the loaded recipe). One-shot per prefill.
+  const [pendingBuild, setPendingBuild] = useState(false);
   const neighbors = useAutobuildNeighbors();
 
   const recipe = useMemo<AutobuildRecipe>(
@@ -202,12 +219,55 @@ export function AutoBuildStudio({
     setSelId(null);
     void previewRef.current.run(recipeRef.current, setResult);
   };
+
+  // Reopen a saved dataset: prefill every knob from its stored recipe, then
+  // ask for a Build. Guarded by the opener's nonce so it runs once per open
+  // and never clobbers a fresh build's in-progress recipe.
+  const appliedNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!open || appliedNonceRef.current === nonce) return;
+    appliedNonceRef.current = nonce;
+    if (editId == null || !initialRecipe) return;
+    const r = initialRecipe;
+    setMediaType(r.media_type);
+    setSemanticQ(r.semantic_q ?? "");
+    setLockedTags(r.locked_tags ?? []);
+    setExcludeTags(r.exclude_tags ?? []);
+    setSeeds(r.seed_media_ids ?? []);
+    setSize(r.size ?? 50);
+    setMetric(r.metric ?? "");
+    setMinScore(r.min_score ?? 60);
+    setExcludeBlur(r.exclude_blur ?? true);
+    setFraming(r.framing_preset ?? "balanced");
+    setLive(r.live ?? true);
+    setDropped(r.dropped ?? []);
+    setForced(r.forced ?? []);
+    setKept(r.kept ?? []);
+    setRebal(r.rebal ?? false);
+    setName(initialName ?? "");
+    setView("grid");
+    setResult(null);
+    setSelId(null);
+    setClusterSel(null);
+    setPendingBuild(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, nonce]);
+
+  // The prefill's deferred Build: ``recipeRef`` now mirrors the loaded knobs.
+  useEffect(() => {
+    if (!pendingBuild) return;
+    setPendingBuild(false);
+    runBuild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingBuild]);
   // A pick-level edit (discard, swap, map-replace, rebalance) after the
   // first Build re-picks live — those are explicit actions on an existing
   // proposal, not passive knobs, so they do not light the amber note.
   useEffect(() => {
     if (!builtRef.current) return;
-    void previewRef.current.run(recipeRef.current, setResult);
+    // A pick edit leaves the recipe scope untouched: reuse the last Build's
+    // pool and geometry so only the re-pick runs, not another library read.
+    void previewRef.current.run(recipeRef.current, setResult, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropped, forced, kept, rebal]);
 
@@ -358,12 +418,35 @@ export function AutoBuildStudio({
     ? `${result.dominant_tag.name}_${picks.length}`
     : `dataset_${picks.length}`;
 
+  const isEdit = editId != null;
+
   const runCreate = () => {
-    const finalName = (name.trim() || placeholderName).trim();
+    let finalName = (name.trim() || placeholderName).trim();
+    // "Save as new" while re-editing: never collide with the original name.
+    if (isEdit && initialName && finalName === initialName.trim()) {
+      finalName = `${finalName}_copy`;
+    }
     if (!picks.length || !finalName) return;
     create.mutate(
       {
         name: finalName,
+        selection: picks.map((pick) => pick.media_id),
+        recipe: { ...recipe, dropped },
+      },
+      {
+        onSuccess: () => {
+          reset();
+          onClose();
+        },
+      },
+    );
+  };
+
+  const runOverwrite = () => {
+    if (editId == null || !picks.length) return;
+    update.mutate(
+      {
+        datasetId: editId,
         selection: picks.map((pick) => pick.media_id),
         recipe: { ...recipe, dropped },
       },
@@ -389,7 +472,9 @@ export function AutoBuildStudio({
         <div style={header}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>
-              Auto-build a dataset — Studio
+              {isEdit
+                ? `Edit dataset — ${initialName || "Studio"}`
+                : "Auto-build a dataset — Studio"}
             </div>
             <div style={headerSub}>
               set the recipe · press Build to run the selection · linked,
@@ -922,9 +1007,24 @@ export function AutoBuildStudio({
           >
             ⚑ Triage ({flaggedPicks.length})
           </button>
+          {isEdit && (
+            <button
+              disabled={!picks.length || create.isPending || update.isPending}
+              onClick={runCreate}
+              style={{
+                ...ghost,
+                opacity: picks.length ? 1 : 0.5,
+                cursor: picks.length ? "pointer" : "default",
+              }}
+            >
+              {create.isPending
+                ? "Saving…"
+                : `＋ Save as new (${picks.length})`}
+            </button>
+          )}
           <button
-            disabled={!picks.length || create.isPending}
-            onClick={runCreate}
+            disabled={!picks.length || create.isPending || update.isPending}
+            onClick={isEdit ? runOverwrite : runCreate}
             style={{
               ...confirmButton,
               background: picks.length
@@ -934,9 +1034,13 @@ export function AutoBuildStudio({
               cursor: picks.length ? "pointer" : "default",
             }}
           >
-            {create.isPending
-              ? "Creating…"
-              : `Create the dataset (${picks.length})`}
+            {isEdit
+              ? update.isPending
+                ? "Overwriting…"
+                : `⤳ Overwrite ${initialName} (${picks.length})`
+              : create.isPending
+                ? "Creating…"
+                : `Create the dataset (${picks.length})`}
           </button>
         </div>
       </div>

@@ -246,6 +246,10 @@ class AutobuildPreviewBody(BaseModel):
     forced: list[int] = []
     kept: list[int] = []
     rebal: bool = False
+    # A pick edit (drop/force/keep/rebalance) reuses the last Build's pool
+    # and geometry instead of rereading the whole library; a fresh Build
+    # leaves this false so index/quality changes are picked up.
+    reuse_pool: bool = False
 
 
 class AutobuildNeighborsBody(BaseModel):
@@ -283,6 +287,18 @@ class AutobuildCreateBody(BaseModel):
     """
 
     name: str
+    selection: list[int]
+    recipe: dict | None = None
+
+
+class AutobuildUpdateBody(BaseModel):
+    """Body for overwriting an existing dataset from a Studio selection.
+
+    The re-edit's "overwrite" save: the dataset keeps its id and name, its
+    media are replaced by ``selection`` and its stored ``recipe`` is
+    refreshed so a later re-edit reopens the new state.
+    """
+
     selection: list[int]
     recipe: dict | None = None
 
