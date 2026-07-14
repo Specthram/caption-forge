@@ -208,6 +208,37 @@ class TestCompositionPillar:
         rows = {row.label: row.value for row in report.pillars[2].rows}
         assert rows["composition re-skins"] == "1"
 
+    def test_reskin_catches_the_resemblance_band(self):
+        """Same framing, DINOv2 in 0.85–0.92: a re-skin, not a near-dup.
+
+        The pair DINOv2 reads at 0.88 (moderately restyled, same framing)
+        used to fall through both lists; the report now flags it as a
+        composition re-skin.
+        """
+        vectors = {1: np.array([1.0, 0.0]), 2: np.array([0.88, 0.475])}
+        depth = {1: np.array([1.0, 0.0]), 2: np.array([1.0, 0.0])}
+        report = dataset_quality.evaluate(
+            _snapshot(
+                [_media(1, 70.0), _media(2, 70.0)],
+                vectors_by_id=vectors,
+                depth_vectors_by_id=depth,
+            )
+        )
+        assert report.reskins == 1
+
+    def test_near_duplicate_is_not_a_reskin(self):
+        """A pair DINOv2 calls a near-dup (>=0.92) is never a re-skin."""
+        vectors = {1: np.array([1.0, 0.0]), 2: np.array([0.95, 0.312])}
+        depth = {1: np.array([1.0, 0.0]), 2: np.array([1.0, 0.0])}
+        report = dataset_quality.evaluate(
+            _snapshot(
+                [_media(1, 70.0), _media(2, 70.0)],
+                vectors_by_id=vectors,
+                depth_vectors_by_id=depth,
+            )
+        )
+        assert report.reskins == 0
+
     def test_style_bucket_rides_the_points(self):
         """Each map dot carries its media's style bucket, neutral default."""
         depth = {1: np.array([1.0, 0.0]), 2: np.array([0.0, 1.0])}

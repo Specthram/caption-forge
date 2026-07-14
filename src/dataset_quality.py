@@ -89,11 +89,18 @@ COMP_SPREAD_FLOOR = 0.05
 COMP_SPREAD_CEILING = 0.45
 
 # A pair is a "re-skin" — same composition, different style — when the depth
-# signal reads them as close but DINOv2 reads them as far apart. The exact
-# rule the Auto-build Studio's Proximity fusion uses (see
-# :mod:`src.autobuild_studio`), so the report and the Studio agree.
+# signal reads them as close (:data:`RESKIN_DEPTH_MIN`) but DINOv2 does *not*
+# already read them as a near-duplicate (:data:`NEAR_DUP_COSINE`). This is a
+# touch looser than the Auto-build Studio's "strong re-skin" line (its layout
+# uses ``dinoS < 0.85`` to pull nodes together): the report only wants to
+# *flag* the same-composition redundancy DINOv2 misses, so it catches the
+# whole band up to the near-dup line — a pair at depth 0.99 / DINOv2 0.88
+# (same framing, moderately restyled) would otherwise fall through both the
+# near-dup list (needs >= 0.92) and the re-skin count and go unreported.
+# A pair DINOv2 already calls a near-dup (>= 0.92) stays a near-dup, never a
+# re-skin, so the two categories never overlap.
 RESKIN_DEPTH_MIN = 0.90
-RESKIN_DINO_MAX = 0.85
+RESKIN_DINO_MAX = NEAR_DUP_COSINE
 
 # Fallback recommended dataset size when the target type has none.
 DEFAULT_SIZE_RANGE = (20, 150)
