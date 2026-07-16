@@ -31,7 +31,7 @@ export const useCaptionStore = create<CaptionState>((set) => ({
   model: "",
   prompt: "",
   temperature: 0.7,
-  seed: "42",
+  seed: "-1",
   think: "auto",
   imgRes: 1024,
   reviewAfter: false,

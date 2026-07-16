@@ -332,6 +332,17 @@ function RuleCard({
   const update = useUpdateReviewRule();
   const remove = useDeleteReviewRule();
   const style = kindStyle(rule.kind);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(rule.text);
+
+  const save = () => {
+    const text = draft.trim();
+    if (text && text !== rule.text) {
+      update.mutate({ id: rule.id, dataset_id: datasetId, text });
+    }
+    setEditing(false);
+  };
+
   return (
     <div
       style={{
@@ -365,6 +376,18 @@ function RuleCard({
           </span>
         )}
         <div style={{ flex: 1 }} />
+        {!editing && (
+          <button
+            title="Edit rule"
+            onClick={() => {
+              setDraft(rule.text);
+              setEditing(true);
+            }}
+            style={xButton}
+          >
+            ✎
+          </button>
+        )}
         {!rule.builtin && (
           <button
             title="Delete rule"
@@ -375,16 +398,43 @@ function RuleCard({
           </button>
         )}
       </div>
-      <p
-        style={{
-          margin: "6px 0 0",
-          fontSize: 12,
-          color: colors.textSecondary,
-          lineHeight: 1.4,
-        }}
-      >
-        {rule.text}
-      </p>
+      {editing ? (
+        <div style={{ marginTop: 6 }}>
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                save();
+              } else if (event.key === "Escape") {
+                setEditing(false);
+              }
+            }}
+            rows={2}
+            style={{ ...selectStyle, resize: "vertical", height: "auto" }}
+          />
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <button style={editSaveButton} onClick={save}>
+              Save
+            </button>
+            <button style={xButton} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p
+          style={{
+            margin: "6px 0 0",
+            fontSize: 12,
+            color: colors.textSecondary,
+            lineHeight: 1.4,
+          }}
+        >
+          {rule.text}
+        </p>
+      )}
     </div>
   );
 }
@@ -676,6 +726,17 @@ const xButton = {
   color: colors.textFaint,
   cursor: "pointer",
   fontSize: 12,
+} as const;
+
+const editSaveButton = {
+  padding: "3px 10px",
+  borderRadius: radii.control,
+  border: "none",
+  background: colors.accent,
+  color: colors.onAccent,
+  cursor: "pointer",
+  fontSize: 11,
+  fontWeight: 600,
 } as const;
 
 const pillButton = {
