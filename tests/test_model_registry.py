@@ -27,6 +27,22 @@ class TestDetectModel:
         meta = detect_model("qwen3-vl-2b.gguf")
         assert meta["hf_config"] == "Qwen/Qwen3-VL-4B-Instruct"
 
+    def test_qwen3_6_gguf_maps_by_size(self):
+        """A Qwen3.6 GGUF maps to the qwen3.6 type and its sized config."""
+        meta = detect_model("Qwen3.6-27B-Q4_K_M.gguf")
+        assert meta["type"] == "qwen3.6"
+        assert meta["format"] == "gguf"
+        assert meta["hf_config"] == "Qwen/Qwen3.6-27B"
+
+    def test_qwen3_6_moe_maps_to_a3b(self):
+        """The 35B MoE size resolves to the A3B config."""
+        meta = detect_model("Qwen3.6-35B-A3B-Instruct.safetensors")
+        assert meta["hf_config"] == "Qwen/Qwen3.6-35B-A3B"
+
+    def test_qwen3_6_not_confused_with_qwen3_vl(self):
+        """Qwen3-VL still maps to qwen3, never the qwen3.6 rule."""
+        assert detect_model("Qwen3-VL-8B-Instruct.gguf")["type"] == "qwen3"
+
     def test_gemma3n_takes_precedence_over_gemma3(self):
         """A Gemma 3n file is detected as gemma3n, not gemma3."""
         assert detect_model("gemma-3n-E4B-it.gguf")["type"] == "gemma3n"

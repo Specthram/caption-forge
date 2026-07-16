@@ -48,6 +48,19 @@ _VISION_RULES = [
         },
         "hf_config_default": "Qwen/Qwen3-VL-4B-Instruct",
     },
+    # Qwen3.6 — a unified multimodal model (image / text / video). Not a
+    # separate "-VL" repo, so it needs its own rule ahead of any generic qwen
+    # match; size read from the filename. Loads via AutoModelForImageTextToText
+    # (safetensors) or the generic mtmd handler (GGUF).
+    {
+        "pattern": re.compile(r"(?i)(qwen.?3\.?6)"),
+        "type": "qwen3.6",
+        "hf_config_by_size": {
+            "27b": "Qwen/Qwen3.6-27B",
+            "35b": "Qwen/Qwen3.6-35B-A3B",
+        },
+        "hf_config_default": "Qwen/Qwen3.6-27B",
+    },
     # Mistral Small 3.2 (and Pixtral) — a Mistral3ForConditionalGeneration VLM.
     # GGUF loads via llama-cpp's GenericMTMDChatHandler, which reads Mistral's
     # chat template embedded in the GGUF; safetensors uses the transformers

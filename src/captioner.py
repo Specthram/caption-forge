@@ -544,6 +544,7 @@ _TRANSFORMERS_BY_FAMILY = {
     "gemma3n": _caption_transformers,
     "gemma4": _caption_transformers,
     "mistral3": _caption_transformers,
+    "qwen3.6": _caption_transformers,
 }
 
 

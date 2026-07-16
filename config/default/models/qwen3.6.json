@@ -1,0 +1,28 @@
+{
+    "prompts": {
+        "Descriptive": {
+            "prompt": "Write a detailed, factual description of this image. Cover the main subject, setting, colors, composition and any visible text. Do not speculate about anything not visible.",
+            "default": true
+        },
+        "Short caption": {
+            "prompt": "Write a single concise sentence describing this image.",
+            "default": false
+        },
+        "Booru tag list": {
+            "prompt": "Write a comma-separated list of Booru-style tags describing this image.",
+            "default": false
+        },
+        "training prompt": {
+            "prompt": "Write a stable diffusion training prompt for this image.",
+            "default": false
+        },
+        "Tag-guided description": {
+            "prompt": "Write a detailed, factual description of this image.\n\nThe picture was already qualified by these tags: {{tags}}. Treat them as ground truth: stay consistent with them and do not contradict them, but describe only what is actually visible.",
+            "default": false
+        }
+    },
+    "settings": {
+        "think_mode": "auto",
+        "temperature": 0.7
+    }
+}

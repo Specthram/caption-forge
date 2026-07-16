@@ -26,15 +26,9 @@ from pathlib import Path
 
 import torch
 from transformers import (
+    AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
-    Qwen2_5_VLForConditionalGeneration,
-    Qwen3VLForConditionalGeneration,
-    Gemma3ForConditionalGeneration,
-    Gemma3nForConditionalGeneration,
-    Gemma4ForConditionalGeneration,
-    LlavaForConditionalGeneration,
-    Mistral3ForConditionalGeneration,
 )
 
 from src import hf_assets
@@ -85,7 +79,7 @@ except ImportError:
 # Global (server-singleton) model state.
 model = None
 processor = None
-current_model_type = None  # family: qwen3 / gemma3 / gemma3n / llava / qwen2.5
+current_model_type = None  # family: qwen3 / gemma3 / llava / mistral3 / …
 current_format = None  # "transformers" | "gguf-text" | "gguf-vision"
 last_status = "Ready."  # last status line, survives page reloads
 loaded_name = None  # filename of the currently loaded model
@@ -100,9 +94,10 @@ if LLAMA_CPP_AVAILABLE:
         "gemma3n": "Gemma3ChatHandler",
         "gemma4": "Gemma4ChatHandler",
         "llava": "Llava16ChatHandler",
-        # Mistral Small 3.2 / Pixtral: the generic mtmd handler reads the
-        # Mistral chat template straight from the GGUF metadata.
+        # Mistral Small 3.2 / Pixtral and Qwen3.6: the generic mtmd handler
+        # reads the model's chat template straight from the GGUF metadata.
         "mistral3": "GenericMTMDChatHandler",
+        "qwen3.6": "GenericMTMDChatHandler",
     }
     _GGUF_VISION_HANDLERS = {
         fam: getattr(_lcf, name)
@@ -218,17 +213,6 @@ def _prepare_model_dir(hf_config_id: str, local_weights: Path) -> Path:
     return model_dir
 
 
-_MODEL_CLASSES = {
-    "qwen2.5": Qwen2_5_VLForConditionalGeneration,
-    "qwen3": Qwen3VLForConditionalGeneration,
-    "gemma3": Gemma3ForConditionalGeneration,
-    "gemma3n": Gemma3nForConditionalGeneration,
-    "gemma4": Gemma4ForConditionalGeneration,
-    "llava": LlavaForConditionalGeneration,
-    "mistral3": Mistral3ForConditionalGeneration,
-}
-
-
 # --- safetensors (transformers) ---
 
 
@@ -241,12 +225,6 @@ def _load_local(local_path: Path, hf_config_id: str, model_type: str):
     # local weights, so from_pretrained loads them with the HF config.
     model_dir = _prepare_model_dir(hf_config_id, local_path)
 
-    model_class = _MODEL_CLASSES.get(model_type)
-    if model_class is None:
-        raise ValueError(
-            f"Unsupported model type for local loading: {model_type!r}"
-        )
-
     # local_files_only: the config/processor are guaranteed present (assembled
     # by _prepare_model_dir), so transformers must not reach the network here.
     use_fast = model_type == "llava"
@@ -257,13 +235,17 @@ def _load_local(local_path: Path, hf_config_id: str, model_type: str):
         local_files_only=True,
     )
 
-    # Let transformers handle tied weights, buffers, dtype and placement.
-    model, info = model_class.from_pretrained(
+    # AutoModelForImageTextToText resolves the concrete architecture from the
+    # config, so every image-text-to-text family (and any future one the
+    # installed transformers knows, or that ships its own modeling code) loads
+    # through this single call — no per-family class table to maintain.
+    model, info = AutoModelForImageTextToText.from_pretrained(
         str(model_dir),
         dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         output_loading_info=True,
         local_files_only=True,
+        trust_remote_code=True,
     )
 
     # ComfyUI text-encoder safetensors use a different key layout and often
