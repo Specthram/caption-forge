@@ -1213,3 +1213,48 @@ export interface WatermarkInventory {
   total: number;
   tab: WatermarkTab;
 }
+
+// -- Rule-based caption review (the Review sub-tab) --------------------------
+
+export type ReviewRuleKind = "det" | "text" | "vlm";
+export type ReviewFindingStatus = "pending" | "accepted" | "rejected";
+
+export interface ReviewRule {
+  id: number;
+  dataset_id: number;
+  text: string;
+  kind: ReviewRuleKind;
+  needs_image: boolean;
+  enabled: boolean;
+  builtin: boolean;
+}
+
+export interface ReviewFinding {
+  id: number;
+  run_id: number;
+  media_id: number;
+  caption_type_id: number;
+  rule_id: number | null;
+  rule_kind: string;
+  rule_text: string | null;
+  note: string;
+  caption_before: string;
+  caption_after: string;
+  status: ReviewFindingStatus;
+  applied_caption: string | null;
+  dataset_id: number;
+  caption_type: string;
+  key: string;
+  stale: boolean;
+}
+
+export interface ReviewCounts {
+  pending: number;
+  accepted: number;
+  rejected: number;
+}
+
+export interface ReviewFindingsResponse {
+  findings: ReviewFinding[];
+  counts: ReviewCounts;
+}

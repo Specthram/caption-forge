@@ -21,7 +21,7 @@ import {
 import { colors, font } from "../../design/tokens";
 import { useUiStore } from "../../store/uiStore";
 import { useCaptionStore } from "../../store/captionStore";
-import { useJobList } from "../../store/jobsStore";
+import { useJobList, useJobsStore } from "../../store/jobsStore";
 import { api } from "../../api/client";
 import { Button, Label, Segmented, Slider, Spinner } from "../atoms";
 
@@ -38,6 +38,7 @@ const selectStyle = {
 export function CaptionLeftPanel() {
   const datasetId = useUiStore((state) => state.datasetId);
   const captionType = useUiStore((state) => state.captionType);
+  const setCaptionTab = useUiStore((state) => state.setCaptionTab);
   const gen = useCaptionStore();
 
   const models = useModels();
@@ -60,6 +61,22 @@ export function CaptionLeftPanel() {
   const prompts = usePrompts(modelType);
   const [selectedTitle, setSelectedTitle] = useState("");
   const [modelOpen, setModelOpen] = useState(false);
+  const [reviewJobId, setReviewJobId] = useState<string | null>(null);
+  const reviewJob = useJobsStore((state) =>
+    reviewJobId ? state.jobs[reviewJobId] : undefined,
+  );
+
+  // A generate-with-review job just finished → jump the user to the Review
+  // sub-tab where the pending findings are waiting.
+  useEffect(() => {
+    if (!reviewJobId || !reviewJob) return;
+    if (reviewJob.state === "done") {
+      setCaptionTab("review");
+      setReviewJobId(null);
+    } else if (reviewJob.state === "error" || reviewJob.state === "stopped") {
+      setReviewJobId(null);
+    }
+  }, [reviewJob, reviewJobId, setCaptionTab]);
 
   useEffect(() => {
     if (prompts.data) {
@@ -96,19 +113,27 @@ export function CaptionLeftPanel() {
 
   const startGenerate = () => {
     if (datasetId == null) return;
-    generate.mutate({
-      dataset_id: datasetId,
-      caption_type: captionType,
-      media_ids: null,
-      exclude_ids: Array.from(gen.locked).map(Number),
-      prompt: gen.prompt,
-      temperature: gen.temperature,
-      seed: gen.seed ? Number(gen.seed) : null,
-      think_mode: gen.think,
-      image_size: gen.imgRes,
-      review_after: gen.reviewAfter,
-      ground_after: gen.groundAfter,
-    });
+    generate.mutate(
+      {
+        dataset_id: datasetId,
+        caption_type: captionType,
+        media_ids: null,
+        exclude_ids: Array.from(gen.locked).map(Number),
+        prompt: gen.prompt,
+        temperature: gen.temperature,
+        seed: gen.seed ? Number(gen.seed) : null,
+        think_mode: gen.think,
+        image_size: gen.imgRes,
+        review_after: gen.reviewAfter,
+        review_judge_model: gen.reviewJudge,
+        ground_after: gen.groundAfter,
+      },
+      {
+        onSuccess: (data) => {
+          if (gen.reviewAfter) setReviewJobId(data.job_id);
+        },
+      },
+    );
   };
 
   const saveCopy = () => {
@@ -312,6 +337,45 @@ export function CaptionLeftPanel() {
           />
           Review after generation
         </label>
+        {gen.reviewAfter && (
+          <div style={{ margin: "2px 0 6px 22px" }}>
+            <select
+              value={gen.reviewJudge}
+              onChange={(event) => gen.set({ reviewJudge: event.target.value })}
+              style={{
+                width: "100%",
+                padding: "5px 8px",
+                borderRadius: 6,
+                border: `1px solid ${colors.borderControl}`,
+                background: colors.input,
+                color: colors.text,
+                fontSize: 12,
+              }}
+            >
+              <option value="">
+                Judge: same as captioner (
+                {status.data?.name ?? (gen.model || "none")})
+              </option>
+              {(models.data?.models ?? []).map((model) => (
+                <option key={model.name} value={model.name}>
+                  Judge: {model.name}
+                </option>
+              ))}
+            </select>
+            <div
+              style={{
+                fontSize: 10,
+                color: colors.textFaint,
+                marginTop: 4,
+                lineHeight: 1.4,
+              }}
+            >
+              After generating, the captioner is unloaded, the judge reviews the
+              new captions, and the app opens the Review tab. Fixes wait for you
+              — nothing is applied automatically.
+            </div>
+          </div>
+        )}
         {groundingEnabled && (
           <label style={checkboxRow}>
             <input

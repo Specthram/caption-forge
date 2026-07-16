@@ -53,6 +53,10 @@ import type {
   PromptsResponse,
   QualityMetric,
   ResolutionKind,
+  ReviewCounts,
+  ReviewFinding,
+  ReviewFindingsResponse,
+  ReviewRule,
   CleanupCategory,
   CleanupReport,
   CleanupResult,
@@ -660,6 +664,7 @@ export interface GenerateVars {
   think_mode: string;
   image_size: number;
   review_after: boolean;
+  review_judge_model?: string;
   ground_after: boolean;
 }
 
@@ -678,6 +683,156 @@ export function useIntegrityReview() {
   return useMutation({
     mutationFn: (vars: TargetParams) => api.post("/review/integrity", vars),
     onSuccess: invalidate,
+  });
+}
+
+// -- Rule-based review (rules, run, findings queue) ---------------------------
+
+/** Drop every review cache a rule/finding change can affect. */
+function useReviewInvalidator() {
+  const client = useQueryClient();
+  return (datasetId?: number) => {
+    client.invalidateQueries({ queryKey: ["review-findings"] });
+    client.invalidateQueries({ queryKey: ["review-counts"] });
+    if (datasetId != null) {
+      client.invalidateQueries({ queryKey: ["review-rules", datasetId] });
+    }
+    // Accepting a finding writes a new revision → the grids/panels are stale.
+    client.invalidateQueries({ queryKey: ["caption-grid"] });
+    client.invalidateQueries({ queryKey: ["media-detail"] });
+  };
+}
+
+/** A dataset's review rules (the builtin presets are seeded on first read). */
+export function useReviewRules(datasetId: number | null) {
+  return useQuery({
+    queryKey: ["review-rules", datasetId],
+    queryFn: () =>
+      api.get<{ rules: ReviewRule[] }>("/review/rules", {
+        dataset_id: datasetId,
+      }),
+    enabled: datasetId != null,
+  });
+}
+
+/** The review queue for a dataset (optionally filtered by status). */
+export function useReviewFindings(
+  datasetId: number | null,
+  status: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["review-findings", datasetId, status],
+    queryFn: () =>
+      api.get<ReviewFindingsResponse>("/review/findings", {
+        dataset_id: datasetId,
+        status,
+      }),
+    enabled: enabled && datasetId != null,
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** The pending/accepted/rejected counts (drives the tab badge everywhere). */
+export function useReviewCounts(datasetId: number | null) {
+  return useQuery({
+    queryKey: ["review-counts", datasetId],
+    queryFn: () =>
+      api.get<ReviewCounts>("/review/counts", { dataset_id: datasetId }),
+    enabled: datasetId != null,
+  });
+}
+
+export function useCreateReviewRule() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: {
+      dataset_id: number;
+      text: string;
+      needs_image: boolean;
+    }) => api.post<{ rule: ReviewRule }>("/review/rules", vars),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+export function useUpdateReviewRule() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: {
+      id: number;
+      dataset_id: number;
+      enabled?: boolean;
+      text?: string;
+    }) =>
+      api.patch<{ rule: ReviewRule }>(`/review/rules/${vars.id}`, {
+        enabled: vars.enabled ?? null,
+        text: vars.text ?? null,
+      }),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+export function useDeleteReviewRule() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { id: number; dataset_id: number }) =>
+      api.del(`/review/rules/${vars.id}`),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+/** Enqueue a review run; the caller watches the returned job id. */
+export function useRunReview() {
+  return useMutation({
+    mutationFn: (vars: {
+      dataset_id: number;
+      caption_type: string;
+      media_ids: number[] | null;
+      judge_model: string;
+      scope: string;
+      rule_ids?: number[] | null;
+      seed?: number | null;
+    }) => api.post<{ job_id: string }>("/review/run", vars),
+  });
+}
+
+/** Accept (writes a new revision) or reject one finding. */
+export function useDecideFinding() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: {
+      id: number;
+      action: "accept" | "reject";
+      caption?: string | null;
+    }) =>
+      api.post<{ finding: ReviewFinding }>(
+        `/review/findings/${vars.id}/decide`,
+        { action: vars.action, caption: vars.caption ?? null },
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Undo a decision: restore the caption and reopen the finding. */
+export function useUndoFinding() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post<{ finding: ReviewFinding }>(`/review/findings/${id}/undo`),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Accept every safe finding, or every pending finding of one rule. */
+export function useDecideBulk() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { dataset_id: number; rule_id?: number | null }) =>
+      api.post<{ accepted: number }>("/review/findings/decide_bulk", {
+        dataset_id: vars.dataset_id,
+        rule_id: vars.rule_id ?? null,
+      }),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
   });
 }
 

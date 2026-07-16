@@ -83,6 +83,9 @@ DEFAULT_TAG_CATEGORIES = [
 # ``think_mode`` is one of "auto"/"off"/"show".
 DEFAULT_THINK_MODE = "auto"
 DEFAULT_TEMPERATURE = 0.7
+# Token ceiling when a type's config saves no ``max_new_tokens`` (kept at the
+# prior hardcoded budget so existing families are unaffected).
+DEFAULT_MAX_NEW_TOKENS = 2048
 
 # Watermark Lab (see src.watermark): tags stripped from a media once its every
 # watermark zone is patched — the editable, persisted factory list.

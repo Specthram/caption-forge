@@ -52,9 +52,38 @@ def generate_body(params):
         grounded = 0
         if params.ground_after:
             grounded = _ground_all(progress, dataset_ref, keys, caption_type)
-        return {"done": total, "grounded": grounded}
+        findings = 0
+        if params.review_after:
+            findings = _review_all(progress, params, keys)
+        return {"done": total, "grounded": grounded, "findings": findings}
 
     return run
+
+
+def _review_all(progress: Progress, params, keys) -> int:
+    """Run the rule-based review over the freshly generated captions.
+
+    Chains the Review sub-tab's judge pass at the end of a generation (the
+    "Review after generation" toggle): the captioner has been freed by the
+    grounding pass (or is swapped out here), the judge is loaded for the run
+    and freed after, and every proposal lands as a *pending* finding — nothing
+    is applied without the human. Reuses the review job body so the det / text
+    / vision passes and the merge rule stay in one place.
+    """
+    # pylint: disable=import-outside-toplevel
+    from server.runners.review_run import review_run_body
+    from server.schemas import ReviewRunBody
+
+    body = ReviewRunBody(
+        dataset_id=params.dataset_id,
+        caption_type=params.caption_type,
+        media_ids=[int(key) for key in keys],
+        judge_model=params.review_judge_model,
+        scope="all",
+        seed=params.seed,
+    )
+    result = review_run_body(body)(progress)
+    return result.get("findings", 0)
 
 
 def _caption_one(path: str, params, seed: int) -> str:

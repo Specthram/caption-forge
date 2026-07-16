@@ -16,6 +16,8 @@ interface CaptionState {
   think: string;
   imgRes: number;
   reviewAfter: boolean;
+  /** Judge model for the review-after pass ("" = reuse the captioner). */
+  reviewJudge: string;
   /** Chain a SigLIP grounding pass on every freshly written caption. */
   groundAfter: boolean;
   locked: Set<string>;
@@ -33,6 +35,7 @@ export const useCaptionStore = create<CaptionState>((set) => ({
   think: "auto",
   imgRes: 1024,
   reviewAfter: false,
+  reviewJudge: "",
   groundAfter: false,
   locked: new Set(),
 

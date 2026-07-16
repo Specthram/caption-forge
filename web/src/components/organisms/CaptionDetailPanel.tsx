@@ -1,13 +1,17 @@
 /** Caption tab right panel: focused-media preview, editor, tags, deploy. */
 
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useAddTag,
   useAutosaveEnabled,
+  useGenerate,
   useGroundingEnabled,
   useIntegrityReview,
   useMediaDetail,
+  useModelStatus,
   useRemoveTag,
+  useRunReview,
   useSaveCaption,
   useSelectRevision,
   useSetRepeats,
@@ -16,6 +20,7 @@ import {
 import { colors, deployColor, font } from "../../design/tokens";
 import { useUiStore } from "../../store/uiStore";
 import { useCaptionStore } from "../../store/captionStore";
+import { useJobsStore } from "../../store/jobsStore";
 import { Button, Dot, IconButton, Label } from "../atoms";
 import { QualityBadge, RepeatsStepper, TagChip } from "../molecules";
 import { CaptionGroundingCard } from "./GroundingCard";
@@ -44,6 +49,10 @@ export function CaptionDetailPanel() {
   const addTag = useAddTag();
   const removeTag = useRemoveTag();
   const integrity = useIntegrityReview();
+  const runReview = useRunReview();
+  const setCaptionTab = useUiStore((state) => state.setCaptionTab);
+  const setPendingReviewJob = useUiStore((state) => state.setPendingReviewJob);
+  const openCaptionEditor = useUiStore((state) => state.openCaptionEditor);
   const groundingEnabled = useGroundingEnabled();
   const autosaveEnabled = useAutosaveEnabled();
   const locked = useCaptionStore((state) => state.locked);
@@ -158,8 +167,23 @@ export function CaptionDetailPanel() {
           <Button
             variant="ghost"
             block
-            disabled={integrity.isPending}
-            onClick={() => integrity.mutate(target)}
+            disabled={integrity.isPending || runReview.isPending || datasetId == null}
+            title="Run the integrity heuristics and a rule-based review on this media"
+            onClick={() => {
+              if (datasetId == null) return;
+              integrity.mutate(target);
+              runReview.mutate(
+                {
+                  dataset_id: datasetId,
+                  caption_type: captionType,
+                  media_ids: [Number(data.key)],
+                  judge_model: "",
+                  scope: "single",
+                },
+                { onSuccess: (res) => setPendingReviewJob(res.job_id) },
+              );
+              setCaptionTab("review");
+            }}
           >
             Review
           </Button>
@@ -222,7 +246,23 @@ export function CaptionDetailPanel() {
 
         {!isTags && (
           <div style={{ marginTop: 16 }}>
-            <Label>Caption · {captionType}</Label>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Label>Caption · {captionType}</Label>
+              <IconButton
+                title="Full-screen editor"
+                aria-label="Full-screen editor"
+                onClick={() => openCaptionEditor(data.key)}
+                style={{ width: 22, height: 22 }}
+              >
+                ⛶
+              </IconButton>
+            </div>
             {data.revisions.length > 0 && (
               <select
                 value={String(data.revision_value ?? "follow")}
@@ -290,6 +330,14 @@ export function CaptionDetailPanel() {
                   dirty={dirty}
                 />
               )}
+              <span style={{ marginRight: 6 }}>
+                <RegenerateButton
+                  mediaKey={data.key}
+                  datasetId={datasetId}
+                  captionType={captionType}
+                  disabled={data.is_video || data.missing}
+                />
+              </span>
               <Button
                 variant="accent"
                 disabled={
@@ -400,6 +448,98 @@ export function CaptionDetailPanel() {
   );
 }
 
+/** Track a generation job the panel submitted, to its end. */
+function useGenerateJob(onDone: () => void) {
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const job = useJobsStore((state) => (jobId ? state.jobs[jobId] : undefined));
+  const running = job?.state === "queued" || job?.state === "running";
+  const doneRef = useRef(onDone);
+  doneRef.current = onDone;
+
+  useEffect(() => {
+    if (!jobId || !job || running) return;
+    if (job.state === "error") setError(job.error || "generation failed");
+    else doneRef.current();
+    setJobId(null);
+  }, [jobId, job, running]);
+
+  return {
+    running,
+    error,
+    sub: job?.sub ?? "",
+    start: (id: string) => {
+      setError(null);
+      setJobId(id);
+    },
+  };
+}
+
+/**
+ * Regenerate the focused media's caption with the VLM, reusing the left
+ * panel's live prompt/params (through the shared caption store). Needs a
+ * loaded model and a prompt; watches the streamed job to its end, then
+ * refetches the caption so the new text lands in the editor.
+ */
+function RegenerateButton({
+  mediaKey,
+  datasetId,
+  captionType,
+  disabled,
+}: {
+  mediaKey: string;
+  datasetId: number;
+  captionType: string;
+  disabled: boolean;
+}) {
+  const gen = useCaptionStore();
+  const status = useModelStatus();
+  const generate = useGenerate();
+  const client = useQueryClient();
+  const job = useGenerateJob(() => {
+    client.invalidateQueries({ queryKey: ["media-detail"] });
+    client.invalidateQueries({ queryKey: ["caption-grid"] });
+  });
+
+  const loaded = status.data?.loaded ?? false;
+  const reason = disabled
+    ? "Not available for this media"
+    : !loaded
+      ? "Load a model in the left panel first"
+      : !gen.prompt.trim()
+        ? "Pick a prompt preset in the left panel first"
+        : null;
+  const busy = job.running || generate.isPending;
+
+  const run = () =>
+    generate.mutate(
+      {
+        dataset_id: datasetId,
+        caption_type: captionType,
+        media_ids: [Number(mediaKey)],
+        exclude_ids: null,
+        prompt: gen.prompt,
+        temperature: gen.temperature,
+        seed: gen.seed ? Number(gen.seed) : null,
+        think_mode: gen.think,
+        image_size: gen.imgRes,
+        review_after: gen.reviewAfter,
+        ground_after: gen.groundAfter,
+      },
+      { onSuccess: (data) => job.start(data.job_id) },
+    );
+
+  return (
+    <Button
+      disabled={!!reason || busy}
+      title={reason ?? "Regenerate this caption with the current prompt"}
+      onClick={run}
+    >
+      {busy ? job.sub || "Generating…" : "↻ Regenerate"}
+    </Button>
+  );
+}
+
 /** The small autosave status beside Save: green ✓ saved / saving / unsaved. */
 function SaveState({ saving, dirty }: { saving: boolean; dirty: boolean }) {
   const state = saving
@@ -429,11 +569,29 @@ function Aside({
   children: React.ReactNode;
   onClose?: () => void;
 }) {
+  const panelWidth = useUiStore((state) => state.panelWidth);
+  const setPanelWidth = useUiStore((state) => state.setPanelWidth);
+
+  // Drag the 5px left-edge handle to resize (clamped 280–560 by the store).
+  const startResize = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+    const onMove = (move: MouseEvent) =>
+      setPanelWidth(startWidth + (startX - move.clientX));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <div
       style={{
         position: "relative",
-        width: 318,
+        width: panelWidth,
         flex: "none",
         borderLeft: `1px solid ${colors.border}`,
         background: colors.panel,
@@ -442,6 +600,19 @@ function Aside({
         minHeight: 0,
       }}
     >
+      <div
+        onMouseDown={startResize}
+        title="Drag to resize"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: -3,
+          width: 6,
+          height: "100%",
+          cursor: "col-resize",
+          zIndex: 3,
+        }}
+      />
       {onClose && (
         <IconButton
           onClick={onClose}

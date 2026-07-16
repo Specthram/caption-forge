@@ -34,6 +34,7 @@ from transformers import (
     Gemma3nForConditionalGeneration,
     Gemma4ForConditionalGeneration,
     LlavaForConditionalGeneration,
+    Mistral3ForConditionalGeneration,
 )
 
 from src import hf_assets
@@ -99,6 +100,9 @@ if LLAMA_CPP_AVAILABLE:
         "gemma3n": "Gemma3ChatHandler",
         "gemma4": "Gemma4ChatHandler",
         "llava": "Llava16ChatHandler",
+        # Mistral Small 3.2 / Pixtral: the generic mtmd handler reads the
+        # Mistral chat template straight from the GGUF metadata.
+        "mistral3": "GenericMTMDChatHandler",
     }
     _GGUF_VISION_HANDLERS = {
         fam: getattr(_lcf, name)
@@ -221,6 +225,7 @@ _MODEL_CLASSES = {
     "gemma3n": Gemma3nForConditionalGeneration,
     "gemma4": Gemma4ForConditionalGeneration,
     "llava": LlavaForConditionalGeneration,
+    "mistral3": Mistral3ForConditionalGeneration,
 }
 
 
@@ -309,7 +314,20 @@ def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
             "llama-cpp version (no chat handler available). Use the "
             ".safetensors version instead."
         )
-    chat_handler = handler_cls(clip_model_path=str(mmproj_path), verbose=False)
+    # The generic mtmd handler (Mistral 3.2 / Pixtral) takes an explicit
+    # ``chat_format`` (None → read the template from the GGUF metadata) and a
+    # required ``mmproj_path``; the family handlers fix their own template and
+    # accept the legacy ``clip_model_path`` alias instead.
+    if handler_cls.__name__ == "GenericMTMDChatHandler":
+        chat_handler = handler_cls(
+            chat_format=None,
+            mmproj_path=str(mmproj_path),
+            verbose=False,
+        )
+    else:
+        chat_handler = handler_cls(
+            clip_model_path=str(mmproj_path), verbose=False
+        )
 
     try:
         model = Llama(
@@ -333,7 +351,7 @@ def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
     current_format = "gguf-vision"
 
 
-def _load_gguf_text(weights_path: str, processor_repo: str):
+def _load_gguf_text(weights_path: str, processor_repo: str, model_type: str):
     """Load a local text-only GGUF model via llama-cpp."""
     global model, processor, current_model_type, current_format
 
@@ -359,7 +377,10 @@ def _load_gguf_text(weights_path: str, processor_repo: str):
     # to a built-in template.
     processor = _load_local_processor(processor_repo)
 
-    current_model_type = "gemma3"
+    # Preserve the detected family so the UI shows this model's own prompts and
+    # generation defaults — not a hardcoded one. Its chat template comes from
+    # the processor above (built-in fallback when absent).
+    current_model_type = model_type
     current_format = "gguf-text"
 
 
@@ -466,7 +487,9 @@ def _load_model(model_cfg: dict):
                 )
             else:
                 _load_gguf_text(
-                    str(model_cfg["local_path"]), model_cfg["hf_config"]
+                    str(model_cfg["local_path"]),
+                    model_cfg["hf_config"],
+                    model_type,
                 )
                 loaded_name = name
                 yield (

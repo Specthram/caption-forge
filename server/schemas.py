@@ -82,6 +82,7 @@ class GenerateBody(BaseModel):
     think_mode: str = "auto"
     image_size: int = 1024
     review_after: bool = False
+    review_judge_model: str = ""  # judge for review_after ("" = the captioner)
     ground_after: bool = False
 
 
@@ -123,6 +124,47 @@ class ReviewTargetBody(BaseModel):
 
 class GroundTargetBody(ReviewTargetBody):
     """Body identifying one caption to ground (or re-heat) in a dataset."""
+
+
+class ReviewRuleCreateBody(BaseModel):
+    """Body creating one custom review rule for a dataset."""
+
+    dataset_id: int
+    text: str
+    needs_image: bool = False
+
+
+class ReviewRuleUpdateBody(BaseModel):
+    """Body toggling or rewriting one review rule."""
+
+    enabled: bool | None = None
+    text: str | None = None
+
+
+class ReviewRunBody(BaseModel):
+    """Body for a rule-based review run over a dataset (or a single media)."""
+
+    dataset_id: int
+    caption_type: str
+    media_ids: list[int] | None = None  # None = the whole dataset
+    judge_model: str = ""  # "" = use the loaded model (same as captioner)
+    scope: str = "all"  # all | selection | flagged | single
+    rule_ids: list[int] | None = None  # None = every enabled rule
+    seed: int | None = None
+
+
+class ReviewDecideBody(BaseModel):
+    """Body recording a human decision on one finding."""
+
+    action: str  # accept | reject
+    caption: str | None = None  # inline-edited text applied on accept
+
+
+class ReviewBulkDecideBody(BaseModel):
+    """Body for the bulk-accept actions (safe fixes / all from a rule)."""
+
+    dataset_id: int
+    rule_id: int | None = None  # None = every safe (det + integrity) finding
 
 
 class CaptionScoreBody(ReviewTargetBody):

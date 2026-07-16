@@ -773,6 +773,255 @@ def run_integrity_review(dataset_ref, key: str, caption_type: str):
     return verdict["status"], verdict["issues"]
 
 
+# --- Rule-based caption review (the Caption tab's Review sub-tab) ---
+
+# Presets seeded the first time a dataset's rules are read. The trigger-word
+# check is deterministic (safe); the two vision rules need the judge to see
+# the image, and "nothing omitted" ships off by default (noisy on terse
+# captions). ``{word}`` is filled from the dataset's first trigger word.
+_BUILTIN_RULES = (
+    (
+        'The caption must contain the trigger word "{word}".',
+        "det",
+        False,
+        True,
+    ),
+    (
+        "The clothing and colors described in the caption must match what "
+        "is visible in the image.",
+        "vlm",
+        True,
+        True,
+    ),
+    (
+        "Nothing clearly visible and important in the image is omitted "
+        "from the caption.",
+        "vlm",
+        True,
+        False,
+    ),
+)
+
+
+def ensure_review_rules(dataset_ref) -> None:
+    """Seed the builtin review presets for a dataset that has no rules yet."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None or store.has_rules(dataset_id):
+        return
+    words = [row["name"] for row in store.dataset_triggerwords(dataset_id)]
+    word = words[0] if words else "trigger"
+    for text, kind, needs_image, enabled in _BUILTIN_RULES:
+        store.create_rule(
+            dataset_id,
+            text.format(word=word),
+            kind,
+            needs_image=needs_image,
+            enabled=enabled,
+            builtin=True,
+        )
+
+
+def review_rules(dataset_ref) -> list:
+    """Return a dataset's review rules, seeding the presets on first read."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return []
+    ensure_review_rules(dataset_ref)
+    return store.list_rules(dataset_id)
+
+
+def create_review_rule(dataset_ref, text: str, needs_image: bool) -> dict:
+    """Add a custom rule; its kind is vision when it needs the image."""
+    dataset_id = _dataset_id(dataset_ref)
+    kind = store.KIND_VLM if needs_image else store.KIND_TEXT
+    rule_id = store.create_rule(
+        dataset_id, text, kind, needs_image=needs_image, builtin=False
+    )
+    return store.get_rule(rule_id)
+
+
+def review_counts(dataset_ref) -> dict:
+    """Return the ``{pending, accepted, rejected}`` finding counts."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return {"pending": 0, "accepted": 0, "rejected": 0}
+    return store.findings_counts(dataset_id)
+
+
+def _enrich_finding(finding: dict) -> dict:
+    """Return a finding with its caption type, media key and stale flag.
+
+    ``stale`` is true when the media's *current* caption no longer matches
+    the ``caption_before`` the diff was computed against (a manual edit landed
+    meanwhile), so the front can skip a proposal that no longer applies.
+    """
+    type_row = store.get_caption_type(finding["caption_type_id"])
+    caption_type = type_row["name"] if type_row else ""
+    key = str(finding["media_id"])
+    current = read_caption(finding["dataset_id"], key, caption_type)
+    data = dict(finding)
+    data["caption_type"] = caption_type
+    data["key"] = key
+    data["stale"] = (
+        current.strip() != (finding["caption_before"] or "").strip()
+    )
+    return data
+
+
+def review_findings(dataset_ref, status: str = None) -> list:
+    """Return the enriched review queue for a dataset (filtered by status)."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return []
+    return [
+        _enrich_finding(finding)
+        for finding in store.list_findings(dataset_id, status)
+    ]
+
+
+def open_review_run(
+    dataset_ref, judge_model: str, scope: str, total: int
+) -> int:
+    """Open a review run for a dataset and return its id."""
+    return store.create_run(
+        _dataset_id(dataset_ref), judge_model, scope, total
+    )
+
+
+def close_review_run(run_id: int, findings_count: int) -> None:
+    """Mark a review run finished with its final finding count."""
+    store.finish_run(run_id, findings_count)
+
+
+def reset_review_queue(dataset_ref, media_id: int = None) -> None:
+    """Clear a dataset's findings (all, or just one media's for a re-run)."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return
+    if media_id is None:
+        store.clear_dataset_findings(dataset_id)
+    else:
+        store.clear_media_findings(dataset_id, media_id)
+
+
+def review_targets(dataset_ref, caption_type: str, media_ids) -> list:
+    """Return per-media review inputs (path + current caption) for a run.
+
+    Skips media with no caption revision yet (nothing to review) and, for a
+    vision pass, media with no file on disk.
+    """
+    targets = []
+    for key in media_ids:
+        key = str(key)
+        text = read_caption(dataset_ref, key, caption_type)
+        if not text.strip():
+            continue
+        targets.append(
+            {
+                "key": key,
+                "media_id": int(key),
+                "path": media_path(dataset_ref, key),
+                "caption": text,
+                "is_video": is_video_file(media_path(dataset_ref, key) or ""),
+            }
+        )
+    return targets
+
+
+def record_review_finding(
+    run_id: int,
+    media_id: int,
+    caption_type: str,
+    note: str,
+    caption_before: str,
+    caption_after: str,
+    rule_id: int = None,
+    rule_kind: str = "",
+) -> int:
+    """Persist one pending finding produced by a run; return its id."""
+    type_id = store.get_or_create_caption_type(caption_type)
+    return store.add_finding(
+        run_id,
+        media_id,
+        type_id,
+        note,
+        caption_before,
+        caption_after,
+        rule_id=rule_id,
+        rule_kind=rule_kind,
+    )
+
+
+def _apply_accept(finding: dict, caption: str = None) -> None:
+    """Write the accepted caption as a new revision for a finding's media."""
+    type_row = store.get_caption_type(finding["caption_type_id"])
+    caption_type = type_row["name"] if type_row else ""
+    final = caption if caption is not None else finding["caption_after"]
+    write_caption(
+        finding["dataset_id"], str(finding["media_id"]), caption_type, final
+    )
+    store.decide_finding(
+        finding["id"], store.STATUS_ACCEPTED, applied_caption=final
+    )
+
+
+def decide_review_finding(
+    finding_id: int, action: str, caption: str = None
+) -> dict:
+    """Accept (write a new revision) or reject one finding; return it.
+
+    ``caption`` overrides the proposed text (an inline edit before accept).
+    """
+    finding = store.get_finding(finding_id)
+    if finding is None:
+        return {}
+    if action == "accept":
+        _apply_accept(finding, caption)
+    else:
+        store.decide_finding(finding_id, store.STATUS_REJECTED)
+    return store.get_finding(finding_id)
+
+
+def undo_review_finding(finding_id: int) -> dict:
+    """Undo a decision: restore the original caption and reopen the finding."""
+    finding = store.get_finding(finding_id)
+    if finding is None:
+        return {}
+    if finding["status"] == store.STATUS_ACCEPTED:
+        type_row = store.get_caption_type(finding["caption_type_id"])
+        caption_type = type_row["name"] if type_row else ""
+        write_caption(
+            finding["dataset_id"],
+            str(finding["media_id"]),
+            caption_type,
+            finding["caption_before"],
+        )
+    store.reopen_finding(finding_id)
+    return store.get_finding(finding_id)
+
+
+def accept_safe_fixes(dataset_ref) -> int:
+    """Accept all pending safe findings (det + integrity); return count."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return 0
+    findings = store.safe_pending(dataset_id)
+    for finding in findings:
+        _apply_accept(finding)
+    return len(findings)
+
+
+def accept_rule_fixes(dataset_ref, rule_id: int) -> int:
+    """Accept every pending finding of one rule; return the count."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return 0
+    findings = store.pending_for_rule(dataset_id, rule_id)
+    for finding in findings:
+        _apply_accept(finding)
+    return len(findings)
+
+
 def media_path(dataset_ref, key: str) -> str | None:
     """Return the effective media file path for a key, or None when unset.
 

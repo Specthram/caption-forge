@@ -32,6 +32,10 @@ React + FastAPI desktop-style UI, served at <http://127.0.0.1:7776>.
 - **Captioning** — batch VLM generation (Qwen2.5-VL, Qwen3-VL, Gemma 3, Gemma 4,
   JoyCaption…), per-media versions with autosave, integrity review, SigLIP 2
   grounding and zero-reference caption scoring.
+- **Rule-based review** — a **Review** sub-tab where a judge model (chosen
+  independently from the captioner) checks each caption against plain-language
+  rules per dataset (deterministic, text-only, or vision). Every proposed fix
+  is human-validated in a keyboard-driven wizard — nothing is applied silently.
 - **Tagging** — WD14 auto-tagger, colored tags in categories, and
   folder→tag mapping rules on import.
 - **Non-destructive editing** — virtual crops and AI watermark removal

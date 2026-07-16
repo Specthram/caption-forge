@@ -1,32 +1,57 @@
 {
     "prompts": {
-        "Formal Descriptive": {
-            "prompt": "Write a long descriptive caption for this image in a formal tone.",
+        "Descriptive": {
+            "prompt": "Write a detailed description for this image.",
+            "default": true
+        },
+        "Descriptive (Casual)": {
+            "prompt": "Write a descriptive caption for this image in a casual tone.",
             "default": false
         },
-        "Detailed Descriptive": {
-            "prompt": "Provide a detailed description of the image.",
+        "Straightforward": {
+            "prompt": "Write a straightforward caption for this image. Begin with the main subject and medium. Mention pivotal elements—people, objects, scenery—using confident, definite language. Focus on concrete details like color, shape, texture, and spatial relationships. Show how elements interact. Omit mood and speculative wording. If text is present, quote it exactly. Note any watermarks, signatures, or compression artifacts. Never mention what's absent, resolution, or unobservable details. Vary your sentence structure and keep the description concise, without starting with \"This image is…\" or similar phrasing.",
             "default": false
         },
-        "Booru tag list": {
-            "prompt": "Write a list of Booru tags for this image.",
+        "Stable Diffusion Prompt": {
+            "prompt": "Output a stable diffusion prompt that is indistinguishable from a real stable diffusion prompt.",
             "default": false
         },
-        "descriptive_fluent": {
-            "prompt": "Please provide a comprehensive and detailed description of the following image, written in natural and fluent english. Include all visible elements and their attributes (e.g., color, size, shape, texture), their spatial relationships, and any notable features or context. Ensure your description, written in natural and fluent english, is clear and vivid, capturing every aspect of the image without omitting any important details.",
+        "MidJourney": {
+            "prompt": "Write a MidJourney prompt for this image.",
             "default": false
         },
-        "training prompt": {
-            "prompt": "Write a long stable diffusion prompt for this image.",
+        "Danbooru tag list": {
+            "prompt": "Generate only comma-separated Danbooru tags (lowercase_underscores). Strict order: `artist:`, `copyright:`, `character:`, `meta:`, then general tags. Include counts (1girl), appearance, clothing, accessories, pose, expression, actions, background. Use precise Danbooru syntax. No extra text.",
             "default": false
         },
-        "Tag-guided description": {
-            "prompt": "Write a long descriptive caption for this image in a formal tone.\n\nThe picture was already qualified by these tags: {{tags}}. Treat them as ground truth: stay consistent with them and do not contradict them, but describe only what is actually visible.",
+        "e621 tag list": {
+            "prompt": "Write a comma-separated list of e621 tags in alphabetical order for this image. Start with the artist, copyright, character, species, meta, and lore tags (if any), prefixed by 'artist:', 'copyright:', 'character:', 'species:', 'meta:', and 'lore:'. Then all the general tags.",
+            "default": false
+        },
+        "Rule34 tag list": {
+            "prompt": "Write a comma-separated list of rule34 tags in alphabetical order for this image. Start with the artist, copyright, character, and meta tags (if any), prefixed by 'artist:', 'copyright:', 'character:', and 'meta:'. Then all the general tags.",
+            "default": false
+        },
+        "Booru-like tag list": {
+            "prompt": "Write a list of Booru-like tags for this image.",
+            "default": false
+        },
+        "Art Critic": {
+            "prompt": "Analyze this image like an art critic would with information about its composition, style, symbolism, the use of color, light, any artistic movement it might belong to, etc.",
+            "default": false
+        },
+        "Product Listing": {
+            "prompt": "Write a caption for this image as though it were a product listing.",
+            "default": false
+        },
+        "Social Media Post": {
+            "prompt": "Write a caption for this image as if it were being used for a social media post.",
             "default": false
         }
     },
     "settings": {
         "think_mode": "auto",
-        "temperature": 0.7
+        "temperature": 0.6,
+        "max_new_tokens": 512
     }
 }

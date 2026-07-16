@@ -23,6 +23,7 @@ from src.constants import GEMMA_MAX_IMAGE_SIZE
 from src.settings import (
     estimate_video_frames,
     get_caption_image_size,
+    get_model_max_new_tokens,
     get_video_fps,
     get_video_max_seconds,
     get_video_prompt,
@@ -287,6 +288,62 @@ def _caption_transformers(
     return _run_transformers(content, [image], temperature, seed, think_mode)
 
 
+def _run_transformers_text(
+    prompt: str, temperature: float, seed: int, think_mode: str
+) -> str:
+    """Run a transformers model on a text-only prompt (no image tokens).
+
+    The judge's text pass (see :mod:`src.caption_judge`): a VL processor
+    accepts a chat with no image, so the caption is fed as plain text and no
+    pixel values are built. Same decode path as :func:`_run_transformers`.
+    """
+    messages = [{"role": "user", "content": prompt}]
+    text_prompt = loader.processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        **_chat_template_kwargs(think_mode),
+    )
+    inputs = loader.processor(
+        text=[text_prompt], return_tensors="pt", truncation=True
+    ).to(loader.model.device)
+
+    kwargs = {"max_new_tokens": _budget(MAX_NEW_TOKENS), "do_sample": False}
+    if temperature > 0.0:
+        kwargs["do_sample"] = True
+        kwargs["temperature"] = temperature
+    if seed != -1 and kwargs["do_sample"]:
+        torch.manual_seed(int(seed))
+
+    generated = loader.model.generate(**inputs, **kwargs)
+    generated = [
+        out[len(ins) :] for ins, out in zip(inputs.input_ids, generated)
+    ]
+    decoded = loader.processor.batch_decode(
+        generated, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )[0]
+    return _finalize(decoded, think_mode)
+
+
+def _run_gguf_text_chat(
+    prompt: str, temperature: float, seed: int, think_mode: str
+) -> str:
+    """Run a GGUF chat model on a text-only prompt (no image).
+
+    Used by :func:`generate_text` when the loaded judge is a GGUF vision
+    model: the same ``create_chat_completion`` call as
+    :func:`_run_gguf_vision`, with a plain-text message and no image part.
+    """
+    out = loader.model.create_chat_completion(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=_budget(MAX_NEW_TOKENS_GGUF),
+        temperature=temperature if temperature > 0.0 else 0.7,
+        top_p=0.9,
+        seed=int(seed) if seed != -1 else None,
+    )
+    return _finalize(out["choices"][0]["message"]["content"], think_mode)
+
+
 def _run_transformers_video(
     video,
     metadata: VideoMetadata,
@@ -486,6 +543,7 @@ _TRANSFORMERS_BY_FAMILY = {
     "gemma3": _caption_transformers,
     "gemma3n": _caption_transformers,
     "gemma4": _caption_transformers,
+    "mistral3": _caption_transformers,
 }
 
 
@@ -509,11 +567,13 @@ def generate_caption(
     ``image_source`` is a file path or a loaded image; ``temperature`` ``0`` is
     greedy where supported; ``seed`` ``-1`` is random; ``think_mode``
     ``auto``/``off`` strip reasoning, ``show`` keeps it; ``max_new_tokens``
-    overrides the budget for this call (``None`` keeps the ceiling). Raises
-    ``CaptionError`` when no captioner matches the loaded model or generation
-    fails.
+    overrides the budget for this call (``None`` falls back to the loaded model
+    type's configured ceiling, e.g. JoyCaption's 512). Raises ``CaptionError``
+    when no captioner matches the loaded model or generation fails.
     """
     global _budget_override  # pylint: disable=global-statement
+    if max_new_tokens is None and loader.current_model_type:
+        max_new_tokens = get_model_max_new_tokens(loader.current_model_type)
     _budget_override = max_new_tokens
     try:
         image = (
@@ -532,6 +592,55 @@ def generate_caption(
 
         return captioner(image, prompt, temperature, seed, think_mode)
 
+    except CaptionError:
+        raise
+    except Exception as exc:
+        raise CaptionError(str(exc)) from exc
+    finally:
+        _budget_override = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+
+# Text-only inference by loaded format (the judge's text pass). Transformers
+# and GGUF-text feed the prompt with no image; a GGUF vision model answers a
+# plain-text chat with the same handler it uses for captions.
+_TEXT_RUNNERS = {
+    "transformers": _run_transformers_text,
+    "gguf-vision": _run_gguf_text_chat,
+    "gguf-text": lambda prompt, temperature, seed, think_mode: (
+        _caption_gguf_text(None, prompt, temperature, seed, think_mode)
+    ),
+}
+
+
+def generate_text(
+    prompt: str,
+    temperature: float = 0.0,
+    seed: int = -1,
+    think_mode: str = "off",
+    max_new_tokens: int | None = None,
+) -> str:
+    """Run the loaded model on a text-only prompt and return its output.
+
+    The judge's text pass (see :mod:`src.caption_judge`): no image is loaded,
+    so a text-only rule is checked without paying for pixel tokens. Dispatches
+    on the loaded format exactly like :func:`generate_caption`. Raises
+    ``CaptionError`` when the loaded format has no text runner or generation
+    fails.
+    """
+    global _budget_override  # pylint: disable=global-statement
+    if max_new_tokens is None and loader.current_model_type:
+        max_new_tokens = get_model_max_new_tokens(loader.current_model_type)
+    _budget_override = max_new_tokens
+    try:
+        runner = _TEXT_RUNNERS.get(loader.current_format)
+        if runner is None:
+            raise CaptionError(
+                f"no text runner for format '{loader.current_format}'"
+            )
+        return runner(prompt, temperature, seed, think_mode)
     except CaptionError:
         raise
     except Exception as exc:
