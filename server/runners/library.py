@@ -17,8 +17,8 @@ import logging
 
 from server.jobs import Progress
 from server.runners.tagger import tag_one
-from src import embeddings, image_stats, index_steps, perceptual_hash
-from src import quality, settings, siglip_grounding
+from src import depth_embeddings, embeddings, image_stats, index_steps
+from src import perceptual_hash, quality, settings, siglip_grounding
 from src import sqlite_store as store
 from src import tagger, thumbnails
 from src.media import is_video_file
@@ -180,6 +180,30 @@ def _embed_pass(chain: _Chain, rows: list) -> int:
         embeddings.unload_model()
 
 
+def _depth_rows(chain: _Chain, rows: list) -> int:
+    """Embed every row with the loaded Depth-Anything V2 model."""
+
+    def work(row, path):
+        store.upsert_media_embedding(
+            row["id"],
+            depth_embeddings.MODEL_ID,
+            depth_embeddings.vector_to_blob(
+                depth_embeddings.embed_image(path)
+            ),
+        )
+
+    return _for_each(chain, rows, "composition", work)
+
+
+def _depth_pass(chain: _Chain, rows: list) -> int:
+    """Embed every pending image's composition; return how many were done."""
+    depth_embeddings.load_model()
+    try:
+        return _depth_rows(chain, rows)
+    finally:
+        depth_embeddings.unload_model()
+
+
 def _siglip_rows(chain: _Chain, rows: list, model_id: str) -> int:
     """Embed every row with the loaded SigLIP 2 checkpoint."""
 
@@ -259,6 +283,10 @@ def _plan(library_id, steps, force: bool) -> dict:
         work[index_steps.EMBED] = store.media_pending_embedding(
             embeddings.MODEL_ID, library_id, force=force
         )
+    if index_steps.DEPTH in plan:
+        work[index_steps.DEPTH] = store.media_pending_embedding(
+            depth_embeddings.MODEL_ID, library_id, force=force
+        )
     if index_steps.SIGLIP in plan:
         work[index_steps.SIGLIP] = store.media_pending_embedding(
             settings.get_grounding_model_id(), library_id, force=force
@@ -279,6 +307,7 @@ def _plan_total(work: dict) -> int:
         len(rows) for rows in work.get(index_steps.QUALITY, {}).values()
     )
     total += len(work.get(index_steps.EMBED, []))
+    total += len(work.get(index_steps.DEPTH, []))
     total += len(work.get(index_steps.SIGLIP, []))
     total += len(work.get(index_steps.WD14, []))
     return total
@@ -298,6 +327,7 @@ def _run_index(library_id, steps, force, progress: Progress) -> dict:
         "indexed": 0,
         "scored": 0,
         "embedded": 0,
+        "depth": 0,
         "semantic": 0,
         "tagged": 0,
     }
@@ -307,6 +337,8 @@ def _run_index(library_id, steps, force, progress: Progress) -> dict:
         result["scored"] = _quality_pass(chain, work[index_steps.QUALITY])
     if work.get(index_steps.EMBED):
         result["embedded"] = _embed_pass(chain, work[index_steps.EMBED])
+    if work.get(index_steps.DEPTH):
+        result["depth"] = _depth_pass(chain, work[index_steps.DEPTH])
     if work.get(index_steps.SIGLIP):
         result["semantic"] = _siglip_pass(chain, work[index_steps.SIGLIP])
     if work.get(index_steps.WD14):

@@ -37,6 +37,7 @@ from server.routers import (
     libraries,
     medias,
     models,
+    profiles,
     prompts,
     review,
     settings,
@@ -83,6 +84,7 @@ app.add_middleware(
 
 for router in (
     models.router,
+    profiles.router,
     prompts.router,
     datasets.router,
     autobuild.router,

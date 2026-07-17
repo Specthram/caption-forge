@@ -20,6 +20,10 @@ Steps, in chain order
     The IQA scores of :data:`QUALITY_METRIC_IDS` (:mod:`src.quality`).
 ``embed``
     DINOv2 vectors (:mod:`src.embeddings`).
+``depth``
+    Depth-Anything V2 composition signatures (:mod:`src.depth_embeddings`),
+    fused into the auto-builder's Proximity graph to catch re-skins — same
+    composition, different style — that DINOv2 rates as far apart.
 ``siglip``
     SigLIP 2 joint-space image vectors (:mod:`src.siglip_grounding`), so a
     typed query ranks the library by meaning — the semantic search of the
@@ -40,6 +44,7 @@ QUALITY_METRIC_IDS = ("musiq", "topiq_nr", "laion_aes")
 THUMBS = "thumbs"
 QUALITY = "quality"
 EMBED = "embed"
+DEPTH = "depth"
 SIGLIP = "siglip"
 WD14 = "wd14"
 
@@ -81,6 +86,19 @@ STEPS = (
         "description": (
             "Visual signatures for near-duplicates, the diversity map and "
             "Auto-build."
+        ),
+    },
+    {
+        "key": DEPTH,
+        "label": "Embeddings — composition",
+        "short": "depth",
+        "models": "Depth-Anything V2 Small",
+        "cost": "GPU · ~0.5 GB VRAM",
+        "images_only": True,
+        "description": (
+            "Style-invariant depth signatures — fused into Proximity to "
+            "catch re-skins (same composition, different style) that DINOv2 "
+            "rates as far apart. Off = fusion falls back to DINOv2 alone."
         ),
     },
     {

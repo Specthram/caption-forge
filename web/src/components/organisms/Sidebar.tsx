@@ -10,7 +10,12 @@ import {
   Settings as SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useDatasets, useModelStatus, useNavCounts } from "../../api/hooks";
+import {
+  useDatasets,
+  useModelStatus,
+  useNavCounts,
+  useProfiles,
+} from "../../api/hooks";
 import type { ViewId } from "../../api/types";
 import { colors, font } from "../../design/tokens";
 import { useUiStore } from "../../store/uiStore";
@@ -49,7 +54,15 @@ export function Sidebar() {
   const datasets = useDatasets();
   const totals = useNavCounts();
   const status = useModelStatus();
+  const profiles = useProfiles();
   const running = useRunningCount();
+
+  // The loaded model shown as its profile (name + weights file); a model
+  // loaded outside profiles falls back to the loader's filename.
+  const loaded = status.data?.loaded ?? false;
+  const loadedProfile = profiles.data?.profiles.find(
+    (p) => p.id === profiles.data.loaded_id,
+  );
 
   // The Caption badge counts the dataset that tab is actually working on,
   // not the library: it is the size of the grid the user is about to see.
@@ -135,22 +148,40 @@ export function Sidebar() {
             display: "flex",
             alignItems: "center",
             gap: 8,
-            fontSize: 11.5,
-            color: colors.textSecondary,
             marginBottom: 10,
           }}
+          title={loaded ? (loadedProfile?.file ?? status.data?.name ?? "") : ""}
         >
-          <Dot color={status.data?.loaded ? colors.ok : colors.textFaint} />
-          <span
-            style={{
-              flex: 1,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {status.data?.loaded ? status.data.name : "No model loaded"}
-          </span>
+          <Dot color={loaded ? colors.ok : colors.textFaint} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: colors.textSecondary,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {loaded
+                ? (loadedProfile?.name ?? status.data?.name ?? "Model loaded")
+                : "No model loaded"}
+            </div>
+            <div
+              style={{
+                fontFamily: font.mono,
+                fontSize: 9,
+                color: colors.textFaint,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {loaded
+                ? `${loadedProfile?.file ?? status.data?.name ?? ""} · loaded`
+                : "unloaded — memory purged"}
+            </div>
+          </div>
         </div>
         <button
           onClick={() => toggleJobs()}

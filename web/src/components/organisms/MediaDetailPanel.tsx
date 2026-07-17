@@ -80,7 +80,7 @@ export function MediaDetailPanel({
         <img
           src={data.thumb}
           alt={data.name}
-          onClick={() => openZoom(data.file, data.name)}
+          onClick={() => openZoom(data.file, data.name, data.is_video)}
           style={{ width: "100%", borderRadius: 8, cursor: "zoom-in" }}
         />
         <div style={{ marginTop: 10, fontSize: 12, fontWeight: 600 }}>

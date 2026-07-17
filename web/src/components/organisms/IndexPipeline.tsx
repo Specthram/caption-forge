@@ -418,7 +418,7 @@ const headerRow = {
 
 const tileGrid = {
   display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
+  gridTemplateColumns: "repeat(3, 1fr)",
   gap: 8,
   marginTop: 10,
 } as const;

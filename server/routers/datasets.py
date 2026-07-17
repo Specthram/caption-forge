@@ -264,6 +264,9 @@ def candidates(  # pylint: disable=too-many-arguments
     return {
         "total": len(rows),
         "pool": len(pool),
+        # Every filtered id (not just the page) so the composer's
+        # "Select all" can pick the whole filtered set at once.
+        "ids": [row["item"]["id"] for row in rows],
         "items": [_candidate_card(row, metric) for row in page],
         "pool_points": [row["xy"] for row in rows if row["xy"]],
         "gap_count": dataset_compose.gap_count(corpus),

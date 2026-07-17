@@ -99,8 +99,9 @@ def _file_entries(path: Path, exts: tuple) -> list[dict]:
     """Return a directory's sub-folders and matching files, kind-tagged.
 
     Sub-folders (``kind": "dir"``) come first, then files whose suffix is in
-    ``exts`` (empty ``exts`` = every file), each ``kind": "file"``; both sorted
-    case-insensitively. Dot-entries and per-entry OS errors are skipped.
+    ``exts`` (empty ``exts`` = every file), each ``kind": "file"`` with its
+    byte ``size``; both sorted case-insensitively. Dot-entries and per-entry
+    OS errors are skipped.
     """
     dirs: list = []
     files: list = []
@@ -126,6 +127,7 @@ def _file_entries(path: Path, exts: tuple) -> list[dict]:
                         "name": child.name,
                         "path": str(Path(child.path)),
                         "kind": "file",
+                        "size": child.stat(follow_symlinks=False).st_size,
                     }
                 )
         except OSError:

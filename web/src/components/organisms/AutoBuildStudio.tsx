@@ -19,6 +19,7 @@ import {
   useAutobuildNeighbors,
   useAutobuildPreviewStream,
   useAutobuildSuggestTags,
+  useAutobuildUpdate,
   useLibraryGrid,
   useReleaseAutobuildModel,
 } from "../../api/hooks";
@@ -30,6 +31,7 @@ import type {
 } from "../../api/types";
 import { colors, font, radii } from "../../design/tokens";
 import { AutoBuildCoverageMap } from "../molecules/AutoBuildCoverageMap";
+import { AutoBuildProximity } from "../molecules/AutoBuildProximity";
 
 const SUGGEST_DEBOUNCE_MS = 500;
 const SIZE_PRESETS = [20, 50, 100, 500];
@@ -45,6 +47,10 @@ const FRAMING_HINT: Record<string, string> = {
 };
 
 const thumbUrl = (id: number) => `/api/media/${id}/thumb`;
+
+/** Normalize a tag name for comparison — mirrors `framing.normalize_tag`. */
+const normTag = (name: string) =>
+  name.trim().toLowerCase().split(/\s+/).join("_");
 
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -72,14 +78,27 @@ function bandColor(score: number | null | undefined): string {
 export function AutoBuildStudio({
   open,
   onClose,
+  editId = null,
+  initialRecipe = null,
+  initialName = "",
+  nonce = 0,
 }: {
   open: boolean;
   onClose: () => void;
+  /** Dataset being re-edited, or null for a fresh build. */
+  editId?: number | null;
+  /** Its stored recipe, prefilled into the knobs when re-editing. */
+  initialRecipe?: AutobuildRecipe | null;
+  /** Its name, prefilled for the overwrite/"save as new" actions. */
+  initialName?: string;
+  /** Bumped by the opener each time; drives a one-shot prefill on re-edit. */
+  nonce?: number;
 }) {
   const config = useAutobuildConfig();
   const preview = useAutobuildPreviewStream();
   const suggest = useAutobuildSuggestTags();
   const create = useAutobuildCreate();
+  const update = useAutobuildUpdate();
   const release = useReleaseAutobuildModel();
   const releaseRef = useRef(release);
   releaseRef.current = release;
@@ -101,7 +120,9 @@ export function AutoBuildStudio({
   const [forced, setForced] = useState<number[]>([]);
   const [kept, setKept] = useState<number[]>([]);
   const [rebal, setRebal] = useState(false);
-  const [view, setView] = useState<"grid" | "clusters">("grid");
+  const [view, setView] = useState<"grid" | "clusters" | "proximity">("grid");
+  const [proxSim, setProxSim] = useState(0.85);
+  const [proxHover, setProxHover] = useState<number | null>(null);
   const [name, setName] = useState("");
   const [result, setResult] = useState<AutobuildStudioPreview | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
@@ -115,6 +136,9 @@ export function AutoBuildStudio({
   // note lights when the live knobs drift from it (edits do not count).
   const [builtSnapshot, setBuiltSnapshot] = useState<string | null>(null);
   const [triageOpen, setTriageOpen] = useState(false);
+  // A re-edit prefills the knobs, then asks for a Build on the next commit
+  // (once ``recipeRef`` reflects the loaded recipe). One-shot per prefill.
+  const [pendingBuild, setPendingBuild] = useState(false);
   const neighbors = useAutobuildNeighbors();
 
   const recipe = useMemo<AutobuildRecipe>(
@@ -202,14 +226,63 @@ export function AutoBuildStudio({
     setSelId(null);
     void previewRef.current.run(recipeRef.current, setResult);
   };
+
+  // Reopen a saved dataset: prefill every knob from its stored recipe, then
+  // ask for a Build. Guarded by the opener's nonce so it runs once per open
+  // and never clobbers a fresh build's in-progress recipe.
+  const appliedNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!open || appliedNonceRef.current === nonce) return;
+    appliedNonceRef.current = nonce;
+    if (editId == null || !initialRecipe) return;
+    const r = initialRecipe;
+    setMediaType(r.media_type);
+    setSemanticQ(r.semantic_q ?? "");
+    setLockedTags(r.locked_tags ?? []);
+    setExcludeTags(r.exclude_tags ?? []);
+    setSeeds(r.seed_media_ids ?? []);
+    setSize(r.size ?? 50);
+    setMetric(r.metric ?? "");
+    setMinScore(r.min_score ?? 60);
+    setExcludeBlur(r.exclude_blur ?? true);
+    setFraming(r.framing_preset ?? "balanced");
+    setLive(r.live ?? true);
+    setDropped(r.dropped ?? []);
+    setForced(r.forced ?? []);
+    setKept(r.kept ?? []);
+    setRebal(r.rebal ?? false);
+    setName(initialName ?? "");
+    setView("grid");
+    setResult(null);
+    setSelId(null);
+    setClusterSel(null);
+    setPendingBuild(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, nonce]);
+
+  // The prefill's deferred Build: ``recipeRef`` now mirrors the loaded knobs.
+  useEffect(() => {
+    if (!pendingBuild) return;
+    setPendingBuild(false);
+    runBuild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingBuild]);
   // A pick-level edit (discard, swap, map-replace, rebalance) after the
   // first Build re-picks live — those are explicit actions on an existing
   // proposal, not passive knobs, so they do not light the amber note.
   useEffect(() => {
     if (!builtRef.current) return;
-    void previewRef.current.run(recipeRef.current, setResult);
+    // A pick edit leaves the recipe scope untouched: reuse the last Build's
+    // pool and geometry so only the re-pick runs, not another library read.
+    void previewRef.current.run(recipeRef.current, setResult, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropped, forced, kept, rebal]);
+
+  // Proximity is gated behind a non-empty selection; if a rebuild empties it
+  // while that tab is open, fall back to the grid so the toggle stays valid.
+  useEffect(() => {
+    if (view === "proximity" && !(result?.picks.length ?? 0)) setView("grid");
+  }, [view, result]);
 
   const suggestRef = useRef(suggest);
   suggestRef.current = suggest;
@@ -358,12 +431,35 @@ export function AutoBuildStudio({
     ? `${result.dominant_tag.name}_${picks.length}`
     : `dataset_${picks.length}`;
 
+  const isEdit = editId != null;
+
   const runCreate = () => {
-    const finalName = (name.trim() || placeholderName).trim();
+    let finalName = (name.trim() || placeholderName).trim();
+    // "Save as new" while re-editing: never collide with the original name.
+    if (isEdit && initialName && finalName === initialName.trim()) {
+      finalName = `${finalName}_copy`;
+    }
     if (!picks.length || !finalName) return;
     create.mutate(
       {
         name: finalName,
+        selection: picks.map((pick) => pick.media_id),
+        recipe: { ...recipe, dropped },
+      },
+      {
+        onSuccess: () => {
+          reset();
+          onClose();
+        },
+      },
+    );
+  };
+
+  const runOverwrite = () => {
+    if (editId == null || !picks.length) return;
+    update.mutate(
+      {
+        datasetId: editId,
         selection: picks.map((pick) => pick.media_id),
         recipe: { ...recipe, dropped },
       },
@@ -389,7 +485,9 @@ export function AutoBuildStudio({
         <div style={header}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>
-              Auto-build a dataset — Studio
+              {isEdit
+                ? `Edit dataset — ${initialName || "Studio"}`
+                : "Auto-build a dataset — Studio"}
             </div>
             <div style={headerSub}>
               set the recipe · press Build to run the selection · linked,
@@ -675,6 +773,16 @@ export function AutoBuildStudio({
               </div>
             )}
 
+            {config.data?.depth_enabled &&
+              (result?.undepthed ?? 0) > 0 && (
+                <div style={depthNote}>
+                  ◇ {result?.undepthed} media in this scope have no composition
+                  depth yet — run the Composition index (Libraries → Index) for
+                  the full re-skin signal; fusion falls back to DINOv2 alone
+                  until then.
+                </div>
+              )}
+
             <div style={{ flex: 1 }} />
             {dirty && !recomputing && (
               <div style={dirtyNote}>
@@ -725,10 +833,15 @@ export function AutoBuildStudio({
               )}
               <Seg
                 value={view}
-                onChange={(value) => setView(value as "grid" | "clusters")}
+                onChange={(value) =>
+                  setView(value as "grid" | "clusters" | "proximity")
+                }
                 options={[
                   { value: "grid", label: "Grid" },
                   { value: "clusters", label: "Clusters" },
+                  ...(picks.length > 0
+                    ? [{ value: "proximity", label: "Proximity" }]
+                    : []),
                 ]}
               />
               {dropped.length > 0 && (
@@ -740,6 +853,39 @@ export function AutoBuildStudio({
                 </span>
               )}
             </div>
+
+            {(result?.stale_tags.length ?? 0) > 0 && (
+              <div style={staleStrip}>
+                <span
+                  style={{ fontSize: 10.5, color: colors.warn, fontWeight: 700 }}
+                >
+                  ⚠ tag no longer exists
+                </span>
+                <span style={{ fontSize: 10.5, color: colors.textMuted }}>
+                  <span style={{ fontFamily: font.mono, color: colors.text }}>
+                    {result?.stale_tags.join(", ")}
+                  </span>{" "}
+                  — deleted from your tags, so it was ignored for this build
+                  (otherwise it would empty the selection). Remove it to keep
+                  the recipe clean.
+                </span>
+                <div style={{ flex: 1 }} />
+                <span
+                  onClick={() => {
+                    const stale = new Set(result?.stale_tags ?? []);
+                    setLockedTags((prev) =>
+                      prev.filter((tag) => !stale.has(normTag(tag))),
+                    );
+                    setExcludeTags((prev) =>
+                      prev.filter((tag) => !stale.has(normTag(tag))),
+                    );
+                  }}
+                  style={clearLink}
+                >
+                  ✕ remove from recipe
+                </span>
+              </div>
+            )}
 
             {swapId != null && (
               <div style={swapStrip}>
@@ -821,15 +967,34 @@ export function AutoBuildStudio({
             )}
 
             <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
-              {view === "grid" ? (
+              {view === "grid" && (
                 <PickGrid picks={picks} handlers={cardHandlers} />
-              ) : (
+              )}
+              {view === "clusters" && (
                 <ClusterView
                   result={result}
                   handlers={cardHandlers}
                   clusterSel={clusterSel}
                   onClusterClick={(id) =>
                     setClusterSel((prev) => (prev === id ? null : id))
+                  }
+                />
+              )}
+              {view === "proximity" && result && (
+                <AutoBuildProximity
+                  picks={picks}
+                  edges={result.proximity.edges}
+                  sim={proxSim}
+                  onSimChange={setProxSim}
+                  hover={proxHover}
+                  onHover={setProxHover}
+                  selId={selId}
+                  onSelect={toggleSelect}
+                  onAutoReplace={(ids) =>
+                    setDropped((prev) => [
+                      ...prev,
+                      ...ids.filter((id) => !prev.includes(id)),
+                    ])
                   }
                 />
               )}
@@ -922,9 +1087,24 @@ export function AutoBuildStudio({
           >
             ⚑ Triage ({flaggedPicks.length})
           </button>
+          {isEdit && (
+            <button
+              disabled={!picks.length || create.isPending || update.isPending}
+              onClick={runCreate}
+              style={{
+                ...ghost,
+                opacity: picks.length ? 1 : 0.5,
+                cursor: picks.length ? "pointer" : "default",
+              }}
+            >
+              {create.isPending
+                ? "Saving…"
+                : `＋ Save as new (${picks.length})`}
+            </button>
+          )}
           <button
-            disabled={!picks.length || create.isPending}
-            onClick={runCreate}
+            disabled={!picks.length || create.isPending || update.isPending}
+            onClick={isEdit ? runOverwrite : runCreate}
             style={{
               ...confirmButton,
               background: picks.length
@@ -934,9 +1114,13 @@ export function AutoBuildStudio({
               cursor: picks.length ? "pointer" : "default",
             }}
           >
-            {create.isPending
-              ? "Creating…"
-              : `Create the dataset (${picks.length})`}
+            {isEdit
+              ? update.isPending
+                ? "Overwriting…"
+                : `⤳ Overwrite ${initialName} (${picks.length})`
+              : create.isPending
+                ? "Creating…"
+                : `Create the dataset (${picks.length})`}
           </button>
         </div>
       </div>
@@ -1506,7 +1690,7 @@ function CompositionPanel({
   onHover: (id: number | null) => void;
   recipe: AutobuildRecipe;
   recomputing: boolean;
-  view: "grid" | "clusters";
+  view: "grid" | "clusters" | "proximity";
   clusterSel: number | null;
   onClusterClick: (id: number) => void;
   selId: number | null;
@@ -2298,6 +2482,15 @@ const indexNote = {
   paddingTop: 12,
 } as const;
 
+// The composition (depth) advice: a soft, opt-in teal notice — depth
+// sharpens the re-skin signal but is never required (DINOv2 is the
+// fallback), so it must not read as the blocking amber warning above.
+const depthNote = {
+  fontSize: 10.5,
+  color: colors.composition,
+  lineHeight: 1.4,
+} as const;
+
 const toolbar = {
   flex: "none",
   display: "flex",
@@ -2665,6 +2858,16 @@ const replaceStrip = {
   padding: "8px 12px",
   borderBottom: "1px solid #3a2d1d",
   background: "#241d12",
+} as const;
+
+const staleStrip = {
+  flex: "none",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "8px 12px",
+  borderBottom: "1px solid #3a2d1d",
+  background: colors.watermarkAmberBg,
 } as const;
 
 const flagPopover = {

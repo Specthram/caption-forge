@@ -60,6 +60,52 @@ def test_locked_tags_are_not_a_ranking_signal():
     assert studio.subject_active(Recipe(semantic_q="red"))
 
 
+def test_proximity_edges_are_sparse_and_ordered():
+    """Only pick pairs at or above the floor become edges, sorted [a, b]."""
+    pool = [_media(1), _media(2), _media(3)]
+    vectors = {
+        1: _vec(1.0, 0.0),
+        2: _vec(0.999, 0.045),  # ~identical to 1 -> near-duplicate (>=0.92)
+        3: _vec(0.0, 1.0),  # orthogonal to 1 -> below the 0.70 floor
+    }
+    corpus = _corpus(pool, vectors)
+    edges = studio.proximity_edges(corpus, [1, 2, 3])
+    assert [edge[:2] for edge in edges] == [[1, 2]]
+    assert edges[0][2] >= studio.NEAR_DUP_COSINE
+    # A pick without a vector contributes no edge.
+    assert studio.proximity_edges(corpus, [1, 2, 99]) == edges
+    # A high floor drops even the near-duplicate pair.
+    assert studio.proximity_edges(corpus, [1, 2, 3], floor=0.999) == []
+    # Every edge carries both the DINOv2 and the (here zero) depth cosine.
+    assert len(edges[0]) == 4
+    assert edges[0][3] == 0.0
+
+
+def test_proximity_edges_fuse_composition_depth():
+    """A depth-close pair crosses the floor even when DINOv2 rates it far."""
+    pool = [_media(1), _media(2)]
+    vectors = {1: _vec(1.0, 0.0), 2: _vec(0.0, 1.0)}  # orthogonal -> dino 0
+    depth = {1: _vec(1.0, 0.0), 2: _vec(0.98, 0.2)}  # ~aligned -> comp high
+    corpus = dataset_compose.build_corpus([], pool, vectors, {}, depth)
+    edges = studio.proximity_edges(corpus, [1, 2])
+    assert len(edges) == 1
+    a, b, dino, comp = edges[0]
+    assert [a, b] == [1, 2]
+    assert dino < studio.PROXIMITY_FLOOR  # DINOv2 alone would drop it
+    assert studio.COMP_W * comp >= studio.PROXIMITY_FLOOR  # depth carries it
+
+
+def test_proximity_edges_fall_back_without_depth():
+    """A pair DINOv2 rates far and with no depth signature yields no edge."""
+    pool = [_media(1), _media(2)]
+    vectors = {1: _vec(1.0, 0.0), 2: _vec(0.0, 1.0)}
+    corpus = dataset_compose.build_corpus(
+        [], pool, vectors, {}, {1: _vec(1.0)}
+    )
+    # Only media 1 carries a depth vector, so the pair's comp cosine is 0.
+    assert studio.proximity_edges(corpus, [1, 2]) == []
+
+
 def test_prepare_gates_off_subject_when_signal_active():
     """A candidate below the subject gate is excluded, not dropped."""
     recipe = Recipe(semantic_q="red", min_score=0)

@@ -15,7 +15,7 @@ const cardStyle = {
 } as const;
 
 function weightNote(weights: Record<string, number>): string {
-  const order = ["quality", "diversity", "hygiene"];
+  const order = ["quality", "diversity", "composition", "hygiene"];
   return order
     .filter((key) => weights[key] != null)
     .map((key) => `${key} ${Math.round(weights[key] * 100)}%`)
@@ -120,13 +120,7 @@ function PillarCard({ pillar }: { pillar: ReportPillar }) {
 
 export function QualityScoreRow({ report }: { report: DatasetReport }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "264px 1fr 1fr 1fr",
-        gap: 12,
-      }}
-    >
+    <div style={{ display: "grid", gridTemplateColumns: "264px 1fr", gap: 12 }}>
       <div style={{ ...cardStyle, display: "flex", gap: 14 }}>
         <Gauge score={report.overall} grade={report.grade} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -159,9 +153,13 @@ export function QualityScoreRow({ report }: { report: DatasetReport }) {
           </div>
         </div>
       </div>
-      {report.pillars.map((pillar) => (
-        <PillarCard key={pillar.key} pillar={pillar} />
-      ))}
+      {/* Four pillars in a 2×2 grid: quality | diversity on top, composition
+          | hygiene below — the extra card no longer fits the old single row. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {report.pillars.map((pillar) => (
+          <PillarCard key={pillar.key} pillar={pillar} />
+        ))}
+      </div>
     </div>
   );
 }

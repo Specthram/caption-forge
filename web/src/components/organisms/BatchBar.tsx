@@ -5,6 +5,7 @@ import {
   useAddTag,
   useDeployMedia,
   useGenerate,
+  useProfiles,
   useRemoveFromDataset,
   useTagCategories,
 } from "../../api/hooks";
@@ -22,6 +23,7 @@ export function BatchBar() {
   const gen = useCaptionStore();
 
   const generate = useGenerate();
+  const profiles = useProfiles();
   const deployMedia = useDeployMedia();
   const addTag = useAddTag();
   const removeFromDataset = useRemoveFromDataset();
@@ -41,12 +43,14 @@ export function BatchBar() {
       media_ids: ids,
       exclude_ids: Array.from(gen.locked).map(Number),
       prompt: gen.prompt,
-      temperature: gen.temperature,
+      profile_id: profiles.data?.active_id ?? null,
       seed: gen.seed ? Number(gen.seed) : null,
-      think_mode: gen.think,
-      image_size: gen.imgRes,
       review_after: gen.reviewAfter,
+      review_judge_profile_id: gen.reviewAfter
+        ? (profiles.data?.judge_id ?? null)
+        : null,
       ground_after: gen.groundAfter,
+      recaption: gen.recaption,
     });
 
   const addTagToAll = async () => {

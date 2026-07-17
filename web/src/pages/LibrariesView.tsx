@@ -433,7 +433,11 @@ export function LibrariesView() {
                     key={card.key}
                     card={card}
                     onClick={() =>
-                      openZoom(`/api/media/${card.key}/file`, card.name)
+                      openZoom(
+                        `/api/media/${card.key}/file`,
+                        card.name,
+                        card.is_video,
+                      )
                     }
                   />
                 ))}

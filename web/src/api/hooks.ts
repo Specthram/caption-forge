@@ -49,10 +49,17 @@ import type {
   MediaGridPage,
   NavCounts,
   ModelInfo,
+  ModelProfile,
   ModelStatus,
+  ProfileDetect,
+  ProfilesResponse,
   PromptsResponse,
   QualityMetric,
   ResolutionKind,
+  ReviewCounts,
+  ReviewFinding,
+  ReviewFindingsResponse,
+  ReviewRule,
   CleanupCategory,
   CleanupReport,
   CleanupResult,
@@ -647,6 +654,87 @@ export function useUnloadModel() {
   });
 }
 
+// -- Model profiles -----------------------------------------------------------
+
+export function useProfiles() {
+  return useQuery({
+    queryKey: ["profiles"],
+    queryFn: () => api.get<ProfilesResponse>("/profiles"),
+    // loaded_id follows load/unload/judge-swap jobs — poll like model-status.
+    refetchInterval: 4000,
+  });
+}
+
+/** Fields accepted by profile create/update (all optional server-side). */
+export type ProfileFields = Partial<Omit<ModelProfile, "id">>;
+
+function useProfilesInvalidator() {
+  const client = useQueryClient();
+  return useCallback(
+    () => client.invalidateQueries({ queryKey: ["profiles"] }),
+    [client],
+  );
+}
+
+export function useCreateProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: (vars: ProfileFields & { role?: "caption" | "judge" }) =>
+      api.post<ModelProfile>("/profiles", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: ({ id, ...fields }: ProfileFields & { id: number }) =>
+      api.put<ModelProfile>(`/profiles/${id}`, fields),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: (id: number) => api.del<{ ok: boolean }>(`/profiles/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSelectProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: (vars: { role: "caption" | "judge"; id: number }) =>
+      api.post<{ ok: boolean }>("/profiles/select", vars),
+    onSuccess: invalidate,
+  });
+}
+
+/** Swap VRAM to a profile's weights (a job — progress via /ws/jobs). */
+export function useLoadProfile() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post<{ job_id: string }>(`/profiles/${id}/load`),
+  });
+}
+
+/** Re-run type/mmproj auto-detection for a picked weights file. */
+export function useDetectProfileFile() {
+  return useMutation({
+    mutationFn: (vars: { dir: string; file: string }) =>
+      api.post<ProfileDetect>("/profiles/detect", vars),
+  });
+}
+
+/** One folder listing of the profile editor's weights/mmproj picker. */
+export function useBrowseModelFiles(path: string) {
+  return useQuery({
+    queryKey: ["profile-browse", path],
+    queryFn: () => api.get<FileListing>("/profiles/browse", { path }),
+  });
+}
+
 // -- Generation -------------------------------------------------------------
 
 export interface GenerateVars {
@@ -655,12 +743,14 @@ export interface GenerateVars {
   media_ids: number[] | null;
   exclude_ids: number[] | null;
   prompt: string;
-  temperature: number;
+  /** Captioner profile: generation params come from it (lazy-swapped). */
+  profile_id: number | null;
   seed: number | null;
-  think_mode: string;
-  image_size: number;
   review_after: boolean;
+  review_judge_profile_id?: number | null;
   ground_after: boolean;
+  /** Off = only caption media whose caption is still empty. */
+  recaption: boolean;
 }
 
 export function useGenerate() {
@@ -678,6 +768,156 @@ export function useIntegrityReview() {
   return useMutation({
     mutationFn: (vars: TargetParams) => api.post("/review/integrity", vars),
     onSuccess: invalidate,
+  });
+}
+
+// -- Rule-based review (rules, run, findings queue) ---------------------------
+
+/** Drop every review cache a rule/finding change can affect. */
+function useReviewInvalidator() {
+  const client = useQueryClient();
+  return (datasetId?: number) => {
+    client.invalidateQueries({ queryKey: ["review-findings"] });
+    client.invalidateQueries({ queryKey: ["review-counts"] });
+    if (datasetId != null) {
+      client.invalidateQueries({ queryKey: ["review-rules", datasetId] });
+    }
+    // Accepting a finding writes a new revision → the grids/panels are stale.
+    client.invalidateQueries({ queryKey: ["caption-grid"] });
+    client.invalidateQueries({ queryKey: ["media-detail"] });
+  };
+}
+
+/** A dataset's review rules (the builtin presets are seeded on first read). */
+export function useReviewRules(datasetId: number | null) {
+  return useQuery({
+    queryKey: ["review-rules", datasetId],
+    queryFn: () =>
+      api.get<{ rules: ReviewRule[] }>("/review/rules", {
+        dataset_id: datasetId,
+      }),
+    enabled: datasetId != null,
+  });
+}
+
+/** The review queue for a dataset (optionally filtered by status). */
+export function useReviewFindings(
+  datasetId: number | null,
+  status: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["review-findings", datasetId, status],
+    queryFn: () =>
+      api.get<ReviewFindingsResponse>("/review/findings", {
+        dataset_id: datasetId,
+        status,
+      }),
+    enabled: enabled && datasetId != null,
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** The pending/accepted/rejected counts (drives the tab badge everywhere). */
+export function useReviewCounts(datasetId: number | null) {
+  return useQuery({
+    queryKey: ["review-counts", datasetId],
+    queryFn: () =>
+      api.get<ReviewCounts>("/review/counts", { dataset_id: datasetId }),
+    enabled: datasetId != null,
+  });
+}
+
+export function useCreateReviewRule() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: {
+      dataset_id: number;
+      text: string;
+      needs_image: boolean;
+    }) => api.post<{ rule: ReviewRule }>("/review/rules", vars),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+export function useUpdateReviewRule() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: {
+      id: number;
+      dataset_id: number;
+      enabled?: boolean;
+      text?: string;
+    }) =>
+      api.patch<{ rule: ReviewRule }>(`/review/rules/${vars.id}`, {
+        enabled: vars.enabled ?? null,
+        text: vars.text ?? null,
+      }),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+export function useDeleteReviewRule() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { id: number; dataset_id: number }) =>
+      api.del(`/review/rules/${vars.id}`),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+/** Enqueue a review run; the caller watches the returned job id. */
+export function useRunReview() {
+  return useMutation({
+    mutationFn: (vars: {
+      dataset_id: number;
+      caption_type: string;
+      media_ids: number[] | null;
+      judge_profile_id: number | null;
+      scope: string;
+      rule_ids?: number[] | null;
+      seed?: number | null;
+    }) => api.post<{ job_id: string }>("/review/run", vars),
+  });
+}
+
+/** Accept (writes a new revision) or reject one finding. */
+export function useDecideFinding() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: {
+      id: number;
+      action: "accept" | "reject";
+      caption?: string | null;
+    }) =>
+      api.post<{ finding: ReviewFinding }>(
+        `/review/findings/${vars.id}/decide`,
+        { action: vars.action, caption: vars.caption ?? null },
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Undo a decision: restore the caption and reopen the finding. */
+export function useUndoFinding() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post<{ finding: ReviewFinding }>(`/review/findings/${id}/undo`),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Accept every safe finding, or every pending finding of one rule. */
+export function useDecideBulk() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { dataset_id: number; rule_id?: number | null }) =>
+      api.post<{ accepted: number }>("/review/findings/decide_bulk", {
+        dataset_id: vars.dataset_id,
+        rule_id: vars.rule_id ?? null,
+      }),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
   });
 }
 
@@ -1302,6 +1542,7 @@ export function useAutobuildPreviewStream() {
     async (
       recipe: AutobuildRecipe,
       onResult: (result: AutobuildStudioPreview) => void,
+      reusePool = false,
     ) => {
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -1312,7 +1553,7 @@ export function useAutobuildPreviewStream() {
         const response = await fetch("/api/autobuild/preview-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(recipe),
+          body: JSON.stringify({ ...recipe, reuse_pool: reusePool }),
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {
@@ -1425,6 +1666,48 @@ export function useAutobuildCreate() {
       recipe: AutobuildRecipe;
     }) => api.post<{ id: number }>("/autobuild/create", vars),
     onSuccess: invalidate,
+  });
+}
+
+/** A dataset's stored Studio recipe, or ``null`` when it was not built there. */
+export interface StoredAutobuildRecipe {
+  recipe: AutobuildRecipe | null;
+  live: boolean;
+}
+
+/**
+ * The Studio recipe a dataset was built from — the source for reopening it
+ * in the Studio to edit again. ``recipe`` is null for hand-made datasets.
+ */
+export function useAutobuildRecipe(datasetId: number | null) {
+  return useQuery({
+    queryKey: ["autobuild-recipe", datasetId],
+    queryFn: () =>
+      api.get<StoredAutobuildRecipe>(`/autobuild/recipe/${datasetId}`),
+    enabled: datasetId != null,
+  });
+}
+
+/** Overwrite an existing dataset's media (and recipe) from a Studio edit. */
+export function useAutobuildUpdate() {
+  const invalidate = useDatasetsInvalidator();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      datasetId: number;
+      selection: number[];
+      recipe: AutobuildRecipe;
+    }) =>
+      api.post<{ id: number }>(`/autobuild/update/${vars.datasetId}`, {
+        selection: vars.selection,
+        recipe: vars.recipe,
+      }),
+    onSuccess: () => {
+      invalidate();
+      client.invalidateQueries({ queryKey: ["dataset-media"] });
+      client.invalidateQueries({ queryKey: ["autobuild-upgrades"] });
+      client.invalidateQueries({ queryKey: ["autobuild-recipe"] });
+    },
   });
 }
 

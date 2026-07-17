@@ -4,14 +4,20 @@ Answers one question about a dataset — *is this good enough to train a
 LoRA?* — with a single 0-100 grade, three explainable pillars and the list
 of media to act on:
 
-* **Image quality** (weight 0.40) — the mean of the enabled IQA scorers
+* **Image quality** (weight 0.35) — the mean of the enabled IQA scorers
   (see :mod:`src.quality`) over the dataset's images, plus the blur/noise
   flags of :mod:`src.image_stats`.
-* **Diversity** (weight 0.35) — the DINOv2 spread of :mod:`src.embeddings`
+* **Diversity** (weight 0.30) — the DINOv2 spread of :mod:`src.embeddings`
   (mean pairwise cosine distance, clusters, near-duplicate pairs and
   neighbor-less outliers, see :mod:`src.embedding_map`), tempered by the
   perceptual redundancy :mod:`src.lookalike` finds in the stored hashes.
-* **Hygiene** (weight 0.25) — structural readiness: caption coverage, the
+* **Composition** (weight 0.15) — the Depth-Anything V2 spread of
+  :mod:`src.depth_embeddings` (the style-invariant framing/pose variety):
+  distinct framing clusters, the depth-signature spread and the re-skin
+  pairs (same framing, different style) DINOv2 alone rates as far apart.
+  Diagnostic-only when the depth index step has not run — it then carries no
+  score and the remaining weights renormalize (see :func:`overall_score`).
+* **Hygiene** (weight 0.20) — structural readiness: caption coverage, the
   resolution floor, degenerate captions and exact duplicates.
 
 The flagged media themselves live in :mod:`src.dataset_issues`; the
@@ -37,9 +43,10 @@ from src import quality
 # section of ``config/*/dataset_quality.json`` and renormalized over the
 # pillars that could actually be scored.
 DEFAULT_WEIGHTS = {
-    "quality": 0.40,
-    "diversity": 0.35,
-    "hygiene": 0.25,
+    "quality": 0.35,
+    "diversity": 0.30,
+    "composition": 0.15,
+    "hygiene": 0.20,
 }
 
 # The IQA scorers a run enables by default. Q-Align is a 7B VLM: powerful,
@@ -71,6 +78,29 @@ SPREAD_CEILING = 0.55
 # a spread average but obvious to a phash).
 _SPREAD_WEIGHT = 0.75
 _UNIQUENESS_WEIGHT = 0.25
+
+# Calibration of the composition score: the depth-signature spread (mean
+# pairwise cosine distance over the Depth-Anything V2 vectors) mapped to
+# 0-100. Depth signatures live closer together than DINOv2 features — the
+# grid is coarse and style-invariant — so the floor/ceiling are tighter than
+# the diversity spread's. FIRST-PASS values: recalibrate against real depth
+# spreads once a few datasets have been indexed.
+COMP_SPREAD_FLOOR = 0.05
+COMP_SPREAD_CEILING = 0.45
+
+# A pair is a "re-skin" — same composition, different style — when the depth
+# signal reads them as close (:data:`RESKIN_DEPTH_MIN`) but DINOv2 does *not*
+# already read them as a near-duplicate (:data:`NEAR_DUP_COSINE`). This is a
+# touch looser than the Auto-build Studio's "strong re-skin" line (its layout
+# uses ``dinoS < 0.85`` to pull nodes together): the report only wants to
+# *flag* the same-composition redundancy DINOv2 misses, so it catches the
+# whole band up to the near-dup line — a pair at depth 0.99 / DINOv2 0.88
+# (same framing, moderately restyled) would otherwise fall through both the
+# near-dup list (needs >= 0.92) and the re-skin count and go unreported.
+# A pair DINOv2 already calls a near-dup (>= 0.92) stays a near-dup, never a
+# re-skin, so the two categories never overlap.
+RESKIN_DEPTH_MIN = 0.90
+RESKIN_DINO_MAX = NEAR_DUP_COSINE
 
 # Fallback recommended dataset size when the target type has none.
 DEFAULT_SIZE_RANGE = (20, 150)
@@ -161,6 +191,28 @@ class MapPoint:  # pylint: disable=too-many-instance-attributes
 
 
 @dataclass(frozen=True)
+class CompositionPoint:  # pylint: disable=too-many-instance-attributes
+    """One dot of the composition map (framing space, coloured by style).
+
+    Positioned by the 2-D projection of the depth signature (so images that
+    share a framing cluster together even when their style differs) and
+    coloured by ``style`` — the mixing of styles inside one framing is what
+    makes a re-skin legible.
+    """
+
+    id: int
+    name: str
+    x: float
+    y: float
+    framing: int
+    style: str
+    reskin: bool
+    quality: float | None
+    width: int | None
+    height: int | None
+
+
+@dataclass(frozen=True)
 class Recommendation:
     """One concrete suggestion of the recommendations card."""
 
@@ -187,6 +239,14 @@ class Snapshot:  # pylint: disable=too-many-instance-attributes
         diversity pillar is enabled).
     vectors_by_id : dict
         ``{media_id: vector}`` DINOv2 embeddings.
+    depth_vectors_by_id : dict
+        ``{media_id: vector}`` Depth-Anything V2 composition signatures.
+        Empty when the depth index step has not run — the composition pillar
+        and map then stay diagnostic-only.
+    styles_by_id : dict
+        ``{media_id: style bucket}`` — the coarse hue bucket colouring each
+        composition-map node (see :mod:`src.hue_bucket`). Only the media
+        carrying a depth signature need one.
     stats_by_id : dict
         ``{media_id: src.image_stats.analyze(...)}``.
     captions_by_id : dict
@@ -209,6 +269,8 @@ class Snapshot:  # pylint: disable=too-many-instance-attributes
     missing_count: int = 0
     scorers: tuple = DEFAULT_SCORERS
     vectors_by_id: dict = field(default_factory=dict)
+    depth_vectors_by_id: dict = field(default_factory=dict)
+    styles_by_id: dict = field(default_factory=dict)
     stats_by_id: dict = field(default_factory=dict)
     captions_by_id: dict = field(default_factory=dict)
     tags_by_id: dict = field(default_factory=dict)
@@ -238,6 +300,10 @@ class QualityReport:  # pylint: disable=too-many-instance-attributes
     map_points: tuple = ()
     clusters: int = 0
     spread: float = 0.0
+    composition_map: tuple = ()
+    composition_links: tuple = ()
+    framings: int = 0
+    reskins: int = 0
     issues: tuple = ()
     recommendations: tuple = ()
     framing: tuple = ()
@@ -433,6 +499,17 @@ def spread_score(spread: float) -> float:
     return max(0.0, min(100.0, (spread - SPREAD_FLOOR) / span * 100.0))
 
 
+def composition_score(spread: float) -> float:
+    """Map a depth-signature spread to a 0-100 composition score.
+
+    The composition analogue of :func:`spread_score`, on its own calibration
+    (:data:`COMP_SPREAD_FLOOR`/:data:`COMP_SPREAD_CEILING`): the framing/pose
+    variety the depth signatures cover, higher being more varied.
+    """
+    span = COMP_SPREAD_CEILING - COMP_SPREAD_FLOOR
+    return max(0.0, min(100.0, (spread - COMP_SPREAD_FLOOR) / span * 100.0))
+
+
 def build_diversity_pillar(
     snapshot: Snapshot,
     result,
@@ -492,6 +569,47 @@ def build_diversity_pillar(
             "more varied."
         ),
         rows=tuple(rows),
+    )
+
+
+def build_composition_pillar(result, reskin_count: int) -> Pillar:
+    """Score the framing/pose variety of the dataset from its depth signatures.
+
+    ``result`` is the composition map (:func:`build_composition_map`), or None
+    when fewer than two media carry a depth signature — the pillar is then
+    diagnostic-only (no score), which drops it from the global grade and
+    renormalizes the other weights. ``reskin_count`` is the number of re-skin
+    pairs (:func:`reskin_pairs`).
+    """
+    if result is None:
+        return Pillar(
+            key="composition",
+            label="Composition",
+            score=None,
+            detail=(
+                "No depth signature yet — run the Composition index "
+                "(Libraries → Index) to score framing variety."
+            ),
+        )
+    score = composition_score(result.spread)
+    rows = (
+        Row("distinct framings", str(result.cluster_count), "muted"),
+        Row("depth spread", f"{result.spread:.2f}", _tone(score)),
+        Row(
+            "composition re-skins",
+            str(reskin_count),
+            "composition" if reskin_count else "ok",
+        ),
+    )
+    return Pillar(
+        key="composition",
+        label="Composition",
+        score=score,
+        detail=(
+            "Depth-Anything V2 depth signatures — framing & pose variety, "
+            "style-invariant."
+        ),
+        rows=rows,
     )
 
 
@@ -684,6 +802,88 @@ def map_points(snapshot: Snapshot, result, issues, quality_by_id) -> tuple:
                 cluster=result.labels[index],
                 outlier=media_id in outliers,
                 near_dup=media_id in paired,
+                quality=quality_by_id.get(media_id),
+                width=item.get("width"),
+                height=item.get("height"),
+            )
+        )
+    return tuple(points)
+
+
+def build_composition_map(snapshot: Snapshot, settings: dict):
+    """Return the clustered projection of the dataset's depth signatures.
+
+    The composition analogue of :func:`build_map`: same deterministic
+    projection/clustering (:func:`src.embedding_map.build`), run on the
+    Depth-Anything V2 signatures instead of the DINOv2 vectors, so images that
+    share a framing cluster together even when their appearance differs.
+    Returns None when fewer than two media carry a depth signature.
+    """
+    pairs = [
+        (item["id"], snapshot.depth_vectors_by_id[item["id"]])
+        for item in snapshot.images
+        if item["id"] in snapshot.depth_vectors_by_id
+    ]
+    if len(pairs) < 2:
+        return None
+    return embedding_map.build(
+        [media_id for media_id, _ in pairs],
+        [vector for _, vector in pairs],
+        sigma=settings["outlier_sigma"],
+    )
+
+
+def reskin_pairs(dino_result, comp_result) -> list:
+    """Return the re-skin ``(a, b)`` id pairs — same framing, different style.
+
+    A pair is a re-skin when the depth signal reads it as close
+    (:data:`RESKIN_DEPTH_MIN`) but DINOv2 reads it as far apart
+    (:data:`RESKIN_DINO_MAX`) — a redundancy DINOv2 alone would miss. Scans
+    only the media carrying *both* an appearance and a composition vector,
+    reading each cosine from the respective similarity matrix.
+    """
+    if dino_result is None or comp_result is None:
+        return []
+    dino_index = {mid: row for row, mid in enumerate(dino_result.ids)}
+    pairs = []
+    ids = comp_result.ids
+    for first, left in enumerate(ids):
+        if left not in dino_index:
+            continue
+        for offset, right in enumerate(ids[first + 1 :], start=first + 1):
+            if right not in dino_index:
+                continue
+            depth_sim = float(comp_result.similarity[first, offset])
+            dino_sim = float(
+                dino_result.similarity[dino_index[left], dino_index[right]]
+            )
+            if depth_sim >= RESKIN_DEPTH_MIN and dino_sim < RESKIN_DINO_MAX:
+                pairs.append((left, right))
+    return pairs
+
+
+def composition_points(
+    snapshot: Snapshot, result, reskin_ids: set, quality_by_id: dict
+) -> tuple:
+    """Return one composition-map dot per depth-embedded media."""
+    if result is None:
+        return ()
+    known = {item["id"]: item for item in snapshot.images}
+    points = []
+    for index, media_id in enumerate(result.ids):
+        item = known.get(media_id)
+        if item is None:
+            continue
+        x, y = result.coords[index]
+        points.append(
+            CompositionPoint(
+                id=media_id,
+                name=item["name"],
+                x=x,
+                y=y,
+                framing=result.labels[index],
+                style=snapshot.styles_by_id.get(media_id, "neutral"),
+                reskin=media_id in reskin_ids,
                 quality=quality_by_id.get(media_id),
                 width=item.get("width"),
                 height=item.get("height"),
@@ -915,6 +1115,9 @@ def evaluate(snapshot: Snapshot) -> QualityReport:
         for item in snapshot.images
     }
     result = build_map(snapshot, settings)
+    comp_result = build_composition_map(snapshot, settings)
+    reskins = reskin_pairs(result, comp_result)
+    reskin_ids = {media_id for pair in reskins for media_id in pair}
     context = _issue_context(snapshot, quality_by_id, result, settings)
     scored = [v for v in quality_by_id.values() if v is not None]
     mean = sum(scored) / len(scored) if scored else None
@@ -925,6 +1128,7 @@ def evaluate(snapshot: Snapshot) -> QualityReport:
     pillars = (
         build_quality_pillar(snapshot, quality_by_id),
         build_diversity_pillar(snapshot, result, settings, pairs),
+        build_composition_pillar(comp_result, len(reskins)),
         build_hygiene_pillar(snapshot, issues, settings),
     )
     weights = settings["weights"]
@@ -950,6 +1154,12 @@ def evaluate(snapshot: Snapshot) -> QualityReport:
         map_points=map_points(snapshot, result, issues, quality_by_id),
         clusters=result.cluster_count if result else 0,
         spread=result.spread if result else 0.0,
+        composition_map=composition_points(
+            snapshot, comp_result, reskin_ids, quality_by_id
+        ),
+        composition_links=tuple(reskins),
+        framings=comp_result.cluster_count if comp_result else 0,
+        reskins=len(reskins),
         issues=issues,
         recommendations=recommendations(snapshot, issues, rows, projected),
         framing=rows,
@@ -960,4 +1170,7 @@ def to_dict(report: QualityReport) -> dict:
     """Return the report as a JSON-serialisable dict (the stored blob)."""
     payload = asdict(report)
     payload["framing"] = [list(row) for row in report.framing]
+    payload["composition_links"] = [
+        list(pair) for pair in report.composition_links
+    ]
     return payload

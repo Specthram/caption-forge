@@ -27,6 +27,22 @@ class TestDetectModel:
         meta = detect_model("qwen3-vl-2b.gguf")
         assert meta["hf_config"] == "Qwen/Qwen3-VL-4B-Instruct"
 
+    def test_qwen3_6_gguf_maps_by_size(self):
+        """A Qwen3.6 GGUF maps to the qwen3.6 type and its sized config."""
+        meta = detect_model("Qwen3.6-27B-Q4_K_M.gguf")
+        assert meta["type"] == "qwen3.6"
+        assert meta["format"] == "gguf"
+        assert meta["hf_config"] == "Qwen/Qwen3.6-27B"
+
+    def test_qwen3_6_moe_maps_to_a3b(self):
+        """The 35B MoE size resolves to the A3B config."""
+        meta = detect_model("Qwen3.6-35B-A3B-Instruct.safetensors")
+        assert meta["hf_config"] == "Qwen/Qwen3.6-35B-A3B"
+
+    def test_qwen3_6_not_confused_with_qwen3_vl(self):
+        """Qwen3-VL still maps to qwen3, never the qwen3.6 rule."""
+        assert detect_model("Qwen3-VL-8B-Instruct.gguf")["type"] == "qwen3"
+
     def test_gemma3n_takes_precedence_over_gemma3(self):
         """A Gemma 3n file is detected as gemma3n, not gemma3."""
         assert detect_model("gemma-3n-E4B-it.gguf")["type"] == "gemma3n"
@@ -44,6 +60,38 @@ class TestDetectModel:
     def test_gemma3_vision(self):
         """A plain Gemma 3 file is detected as gemma3."""
         assert detect_model("gemma-3-12b-it.safetensors")["type"] == "gemma3"
+
+    def test_joycaption_gguf_maps_to_llava(self):
+        """A JoyCaption GGUF maps to the llava type (loader handles it)."""
+        meta = detect_model("Llama-JoyCaption-Beta-One-Hf-Llava-Q4_K_M.gguf")
+        assert meta["type"] == "llava"
+        assert meta["format"] == "gguf"
+        assert meta["hf_config"] == (
+            "fancyfeast/llama-joycaption-beta-one-hf-llava"
+        )
+
+    def test_joycaption_safetensors_maps_to_llava(self):
+        """A JoyCaption safetensors file is detected as llava."""
+        meta = detect_model("llama-joycaption-beta-one-hf-llava.safetensors")
+        assert meta["type"] == "llava"
+        assert meta["format"] == "safetensors"
+
+    def test_mistral_small_3_2_gguf_maps_to_mistral3(self):
+        """A Mistral Small 3.2 GGUF maps to the mistral3 type."""
+        meta = detect_model("Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf")
+        assert meta["type"] == "mistral3"
+        assert meta["format"] == "gguf"
+        assert meta["hf_config"] == (
+            "unsloth/Mistral-Small-3.2-24B-Instruct-2506"
+        )
+
+    def test_pixtral_maps_to_mistral3(self):
+        """A Pixtral file is detected as mistral3."""
+        assert detect_model("pixtral-12b-Q8_0.gguf")["type"] == "mistral3"
+
+    def test_text_only_mistral_is_ignored(self):
+        """A plain text Mistral (no 3.2 / pixtral) is not a vision model."""
+        assert detect_model("Mistral-7B-Instruct-v0.3-Q4_K_M.gguf") is None
 
     def test_skips_text_encoders(self):
         """CLIP / T5 text-encoder files are not vision models."""
@@ -76,6 +124,19 @@ class TestFindMmproj:
         assert (
             find_mmproj("Qwen3-VL-8B-Q8_0.gguf", files)
             == "mmproj-Qwen3-VL-8B-f16.gguf"
+        )
+
+    def test_joycaption_pairs_its_llava_projector(self):
+        """A JoyCaption model pairs with its own mmproj (llava family)."""
+        model = "Llama-JoyCaption-Beta-One-Hf-Llava-Q4_K_M.gguf"
+        files = [
+            model,
+            "mmproj-Llama-JoyCaption-Beta-One-Llava-F16.gguf",
+            "mmproj-Qwen3-VL-8B-f16.gguf",
+        ]
+        assert (
+            find_mmproj(model, files, model_family="llava")
+            == "mmproj-Llama-JoyCaption-Beta-One-Llava-F16.gguf"
         )
 
     def test_no_mmproj_present_returns_none(self):

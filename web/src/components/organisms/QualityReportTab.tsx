@@ -12,7 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useDatasetReport,
   useGenerate,
-  useModelStatus,
+  useProfiles,
   usePrompts,
   useRemoveDatasetMedia,
   useResolveIssue,
@@ -23,6 +23,7 @@ import { colors, font, radii, scorerColor } from "../../design/tokens";
 import { useJobsStore } from "../../store/jobsStore";
 import { useUiStore } from "../../store/uiStore";
 import { Button } from "../atoms";
+import { CompositionMap } from "./CompositionMap";
 import { FlaggedMedia } from "./FlaggedMedia";
 import { QualityCharts } from "./QualityCharts";
 import { QualityScoreRow } from "./QualityScoreRow";
@@ -35,7 +36,6 @@ import type {
 } from "../../api/types";
 
 const TARGET_TYPES = ["character", "style", "concept"];
-const RECAPTION_IMAGE_SIZE = 1024;
 
 const cardStyle = {
   background: colors.card,
@@ -218,8 +218,11 @@ export function QualityReportTab({ datasetId }: { datasetId: number }) {
   const unresolveIssue = useUnresolveIssue();
   const removeMedia = useRemoveDatasetMedia();
   const generate = useGenerate();
-  const modelStatus = useModelStatus();
-  const prompts = usePrompts(modelStatus.data?.type ?? null);
+  const profiles = useProfiles();
+  const activeProfile = profiles.data?.profiles.find(
+    (p) => p.id === profiles.data.active_id,
+  );
+  const prompts = usePrompts(activeProfile?.type || null);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [force, setForce] = useState(false);
@@ -284,8 +287,8 @@ export function QualityReportTab({ datasetId }: { datasetId: number }) {
   const promptText =
     prompts.data?.prompts.find((item) => item.title === prompts.data?.selected)
       ?.prompt ?? "";
-  const recaptionDisabled = !modelStatus.data?.loaded
-    ? "Load a model in the Caption tab first"
+  const recaptionDisabled = !activeProfile?.file
+    ? "Pick a model profile with weights in the Caption tab first"
     : !promptText
       ? "Select a prompt preset in the Caption tab first"
       : null;
@@ -314,12 +317,12 @@ export function QualityReportTab({ datasetId }: { datasetId: number }) {
         media_ids: [mediaId],
         exclude_ids: null,
         prompt: promptText,
-        temperature: prompts.data?.temperature ?? 0.7,
+        profile_id: profiles.data?.active_id ?? null,
         seed: null,
-        think_mode: prompts.data?.think_mode ?? "auto",
-        image_size: RECAPTION_IMAGE_SIZE,
         review_after: false,
         ground_after: false,
+        // An explicit per-media re-caption always rewrites, filled or not.
+        recaption: true,
       },
       { onSuccess: () => resolve(issue, "recaptioned") },
     );
@@ -441,6 +444,7 @@ export function QualityReportTab({ datasetId }: { datasetId: number }) {
         <>
           <QualityScoreRow report={stored} />
           <QualityCharts report={stored} />
+          <CompositionMap report={stored} />
           <FlaggedMedia
             report={stored}
             resolutions={resolutions}

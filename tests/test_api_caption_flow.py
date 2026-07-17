@@ -327,9 +327,11 @@ def test_lookalike_discard_dismiss_reset(store_db, thumb_cache_dir, tmp_path):
         )
 
     with TestClient(app) as test_client:
-        detect = lambda: test_client.post(  # noqa: E731
-            "/api/libraries/lookalike/detect", json={"similarity": 88}
-        ).json()["groups"]
+
+        def detect():
+            return test_client.post(
+                "/api/libraries/lookalike/detect", json={"similarity": 88}
+            ).json()["groups"]
 
         groups = detect()
         assert len(groups) == 1
@@ -409,3 +411,40 @@ def test_settings_save_roundtrip(client):
         == 200
     )
     assert test_client.get("/api/settings").json()["gguf_n_ctx"] == 16384
+
+
+def test_generate_skips_filled_captions_when_recaption_off(
+    store_db, thumb_cache_dir, tmp_path, monkeypatch
+):
+    """With ``recaption`` off, only empty-caption media are captioned."""
+    # pylint: disable=unused-argument
+    from server.runners import generate as generate_runner
+    from server.schemas import GenerateBody
+
+    for name, color in (("a.png", (219, 68, 55)), ("b.png", (66, 133, 244))):
+        Image.new("RGB", (64, 64), color).save(tmp_path / name)
+    library_id = store.create_library("fixtures", str(tmp_path))
+    store.scan_library(library_id)
+    media = sorted(store.list_library_media(), key=lambda row: row["name"])
+    dataset_id = store.create_dataset("shapes")
+    for row in media:
+        store.add_media_to_dataset(dataset_id, row["id"])
+    filled, empty = str(media[0]["id"]), str(media[1]["id"])
+    storage.write_caption(dataset_id, filled, "txt", "already there")
+
+    monkeypatch.setattr(
+        generate_runner,
+        "_caption_one",
+        lambda path, params, seed, profile: "fresh",
+    )
+    params = GenerateBody(
+        dataset_id=dataset_id,
+        caption_type="txt",
+        prompt="describe",
+        recaption=False,
+    )
+    result = generate_runner.generate_body(params)(lambda **kwargs: None)
+
+    assert result["done"] == 1
+    assert storage.read_caption(dataset_id, filled, "txt") == "already there"
+    assert storage.read_caption(dataset_id, empty, "txt") == "fresh"

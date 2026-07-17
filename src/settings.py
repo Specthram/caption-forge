@@ -17,6 +17,7 @@ from src import config
 from src.constants import (
     DEFAULT_CAPTION_EXTENSIONS,
     DEFAULT_GGUF_N_CTX,
+    DEFAULT_MAX_NEW_TOKENS,
     DEFAULT_TEMPERATURE,
     DEFAULT_THINK_MODE,
     DEFAULT_VIDEO_FPS,
@@ -238,6 +239,17 @@ def set_model_temperature(model_type: str, temperature: float) -> None:
     config.set_user_model_setting(
         model_type, "temperature", float(temperature)
     )
+
+
+def get_model_max_new_tokens(model_type: str) -> int:
+    """Return the saved token ceiling for ``model_type`` (factory fallback)."""
+    value = _model_settings(model_type).get(
+        "max_new_tokens", DEFAULT_MAX_NEW_TOKENS
+    )
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_NEW_TOKENS
 
 
 # --- Validation / clamping ---

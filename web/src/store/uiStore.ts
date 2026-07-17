@@ -31,6 +31,7 @@ interface ZoomState {
   open: boolean;
   src: string | null;
   name: string;
+  isVideo: boolean;
   scale: number;
   tx: number;
   ty: number;
@@ -141,6 +142,19 @@ interface TagsViewState {
   activeId: number | null;
 }
 
+/** The Review wizard overlay (full-screen keyboard triage of the queue). */
+interface ReviewWizardState {
+  open: boolean;
+  /** Index into the pending queue the wizard is positioned on. */
+  index: number;
+}
+
+/** The full-screen caption editor overlay. */
+interface CaptionEditorState {
+  open: boolean;
+  key: string | null;
+}
+
 interface UiState {
   view: ViewId;
   datasetId: number | null;
@@ -149,6 +163,14 @@ interface UiState {
   qualityMetric: string;
   page: number;
   focusKey: string | null;
+  /** Caption workspace sub-tab: the gallery or the rule-based Review queue. */
+  captionTab: "caption" | "review";
+  /** Detail panel width in px (drag handle on its left edge, 280–560). */
+  panelWidth: number;
+  reviewWizard: ReviewWizardState;
+  captionEditor: CaptionEditorState;
+  /** A single-media review job id awaiting completion (auto-opens wizard). */
+  pendingReviewJob: string | null;
   /** The Media view's focused card — set from outside when a report
    *  inspector navigates to "Open in Media". */
   mediaFocusKey: string | null;
@@ -170,6 +192,14 @@ interface UiState {
   setView: (view: ViewId) => void;
   setDataset: (id: number | null) => void;
   setCaptionType: (type: string) => void;
+  setCaptionTab: (tab: "caption" | "review") => void;
+  setPanelWidth: (width: number) => void;
+  openReviewWizard: (index?: number) => void;
+  closeReviewWizard: () => void;
+  setReviewWizard: (partial: Partial<ReviewWizardState>) => void;
+  openCaptionEditor: (key: string) => void;
+  closeCaptionEditor: () => void;
+  setPendingReviewJob: (jobId: string | null) => void;
   setReviewFilter: (filter: string) => void;
   setQualityMetric: (metric: string) => void;
   setPage: (page: number) => void;
@@ -198,7 +228,7 @@ interface UiState {
   ) => void;
   closeCrop: () => void;
   setCrop: (partial: Partial<CropState>) => void;
-  openZoom: (src: string, name: string) => void;
+  openZoom: (src: string, name: string, isVideo?: boolean) => void;
   closeZoom: () => void;
   setZoom: (partial: Partial<ZoomState>) => void;
   openCompare: (
@@ -221,6 +251,7 @@ const CLOSED_ZOOM: ZoomState = {
   open: false,
   src: null,
   name: "",
+  isVideo: false,
   scale: 1,
   tx: 0,
   ty: 0,
@@ -294,6 +325,11 @@ export const useUiStore = create<UiState>()(
       page: 1,
       focusKey: null,
       mediaFocusKey: null,
+      captionTab: "caption",
+      panelWidth: 320,
+      reviewWizard: { open: false, index: 0 },
+      captionEditor: { open: false, key: null },
+      pendingReviewJob: null,
 
       datasetsView: DEFAULT_DATASETS_VIEW,
       mediaView: DEFAULT_MEDIA_VIEW,
@@ -319,6 +355,23 @@ export const useUiStore = create<UiState>()(
           datasetsView: DEFAULT_DATASETS_VIEW,
         }),
       setCaptionType: (captionType) => set({ captionType }),
+      setCaptionTab: (captionTab) => set({ captionTab }),
+      setPanelWidth: (panelWidth) =>
+        set({ panelWidth: Math.max(280, Math.min(560, panelWidth)) }),
+      openReviewWizard: (index = 0) =>
+        set({ reviewWizard: { open: true, index } }),
+      closeReviewWizard: () =>
+        set((state) => ({
+          reviewWizard: { ...state.reviewWizard, open: false },
+        })),
+      setReviewWizard: (partial) =>
+        set((state) => ({
+          reviewWizard: { ...state.reviewWizard, ...partial },
+        })),
+      openCaptionEditor: (key) => set({ captionEditor: { open: true, key } }),
+      closeCaptionEditor: () =>
+        set({ captionEditor: { open: false, key: null } }),
+      setPendingReviewJob: (pendingReviewJob) => set({ pendingReviewJob }),
       setReviewFilter: (reviewFilter) => set({ reviewFilter, page: 1 }),
       setQualityMetric: (qualityMetric) => set({ qualityMetric }),
       setPage: (page) => set({ page }),
@@ -374,8 +427,8 @@ export const useUiStore = create<UiState>()(
       closeCrop: () => set({ crop: CLOSED_CROP }),
       setCrop: (partial) =>
         set((state) => ({ crop: { ...state.crop, ...partial } })),
-      openZoom: (src, name) =>
-        set({ zoom: { ...CLOSED_ZOOM, open: true, src, name } }),
+      openZoom: (src, name, isVideo = false) =>
+        set({ zoom: { ...CLOSED_ZOOM, open: true, src, name, isVideo } }),
       closeZoom: () => set({ zoom: CLOSED_ZOOM }),
       setZoom: (partial) =>
         set((state) => ({ zoom: { ...state.zoom, ...partial } })),
@@ -426,6 +479,8 @@ export const useUiStore = create<UiState>()(
         page: state.page,
         focusKey: state.focusKey,
         mediaFocusKey: state.mediaFocusKey,
+        captionTab: state.captionTab,
+        panelWidth: state.panelWidth,
         datasetsView: state.datasetsView,
         mediaView: state.mediaView,
         watermarkView: state.watermarkView,

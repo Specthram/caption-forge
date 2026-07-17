@@ -4,14 +4,17 @@ import { useEffect, useState } from "react";
 import {
   useIndexStatus,
   useModels,
+  useProfiles,
   useSaveSettings,
+  useSelectProfile,
   useSettings,
   useTaggerModels,
 } from "../api/hooks";
-import type { GroundingSize, IndexStep } from "../api/types";
+import type { GroundingSize, IndexStep, ModelProfile } from "../api/types";
 import { colors, font } from "../design/tokens";
 import { Button, Label, Segmented, Toast, Toggle } from "../components/atoms";
 import { FolderBrowserModal } from "../components/organisms/FolderBrowserModal";
+import { ProfileEditorModal } from "../components/organisms/ProfileEditorModal";
 
 const NCTX = [2048, 4096, 8192, 16384, 32768, 65536, 131072];
 
@@ -21,6 +24,9 @@ type MachineSteps = Record<string, boolean>;
 export function SettingsView() {
   const settings = useSettings();
   const models = useModels();
+  const profiles = useProfiles();
+  const selectProfile = useSelectProfile();
+  const [editJudge, setEditJudge] = useState<ModelProfile | null>(null);
   const status = useIndexStatus();
   const taggers = useTaggerModels();
   const save = useSaveSettings();
@@ -367,10 +373,61 @@ export function SettingsView() {
             ))}
           </select>
           <div style={{ fontSize: 11, marginTop: 6, color: colors.textMuted }}>
-            4096 is plenty for images; video frames need more. Ignored by safetensors.
+            4096 is plenty for images; video frames need more. Ignored by
+            safetensors. Default for new model profiles — each profile
+            overrides its own.
           </div>
         </Field>
       </Card>
+
+      <Card title="Review judge">
+        <Field label="Default judge profile">
+          <select
+            style={input}
+            value={profiles.data?.judge_id ?? ""}
+            onChange={(e) =>
+              selectProfile.mutate({
+                role: "judge",
+                id: Number(e.target.value),
+              })
+            }
+          >
+            {(profiles.data?.profiles ?? []).map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+                {profile.file ? ` — ${profile.file}` : ""}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, marginTop: 6 }}>
+            <span
+              onClick={() => {
+                const judge = profiles.data?.profiles.find(
+                  (p) => p.id === profiles.data.judge_id,
+                );
+                if (judge) setEditJudge(judge);
+              }}
+              style={{ color: colors.accent, cursor: "pointer" }}
+            >
+              edit profile
+            </span>
+            <span style={{ color: colors.textMuted }}>
+              {" "}
+              — the model reviewing captions (Review tab and “review after
+              generation”). Applied immediately, not part of Save.
+            </span>
+          </div>
+        </Field>
+      </Card>
+      {editJudge && (
+        <ProfileEditorModal
+          profile={editJudge}
+          role="judge"
+          families={profiles.data?.families ?? []}
+          profileCount={profiles.data?.profiles.length ?? 1}
+          onClose={() => setEditJudge(null)}
+        />
+      )}
 
       <Card
         title="This machine — index scans"

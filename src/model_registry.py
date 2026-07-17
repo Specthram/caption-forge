@@ -8,8 +8,11 @@ import re
 
 # Filenames that are text-encoders or text-only LLMs — never vision models.
 # Note: qwen3 *without* "vl" is the text encoder; qwen3-vl is the vision model.
+# Plain "mistral" is NOT skipped here: text-only Mistrals match no vision rule
+# below (so they resolve to None anyway), while the vision Mistral Small 3.2 /
+# Pixtral must be allowed through to its rule.
 _SKIP_PATTERNS = re.compile(
-    r"(?i)(^clip|t5xxl|flant5|umt5|gner.?t5|mistral|ltx|nsfw_wan|modelst5|"
+    r"(?i)(^clip|t5xxl|flant5|umt5|gner.?t5|ltx|nsfw_wan|modelst5|"
     r"zimage|josiefied|qwen_3_\d+b|qwen3.*base|^mmproj|chat_template)",
     re.IGNORECASE,
 )
@@ -44,6 +47,39 @@ _VISION_RULES = [
             "8b": "Qwen/Qwen3-VL-8B-Instruct",
         },
         "hf_config_default": "Qwen/Qwen3-VL-4B-Instruct",
+    },
+    # Qwen3.6 — a unified multimodal model (image / text / video). Not a
+    # separate "-VL" repo, so it needs its own rule ahead of any generic qwen
+    # match; size read from the filename. Loads via AutoModelForImageTextToText
+    # (safetensors) or the generic mtmd handler (GGUF).
+    {
+        "pattern": re.compile(r"(?i)(qwen.?3\.?6)"),
+        "type": "qwen3.6",
+        "hf_config_by_size": {
+            "27b": "Qwen/Qwen3.6-27B",
+            "35b": "Qwen/Qwen3.6-35B-A3B",
+        },
+        "hf_config_default": "Qwen/Qwen3.6-27B",
+    },
+    # Mistral Small 3.2 (and Pixtral) — a Mistral3ForConditionalGeneration VLM.
+    # GGUF loads via llama-cpp's GenericMTMDChatHandler, which reads Mistral's
+    # chat template embedded in the GGUF; safetensors uses the transformers
+    # class. The ungated unsloth mirror supplies config/processor (mistralai/*
+    # is gated → 401); GGUF never fetches it.
+    {
+        "pattern": re.compile(r"(?i)(mistral.?(small.?)?3\.?2|pixtral)"),
+        "type": "mistral3",
+        "hf_config": "unsloth/Mistral-Small-3.2-24B-Instruct-2506",
+    },
+    # JoyCaption — a LLaVA-architecture VLM (SigLIP2 vision + Llama 3.1). The
+    # loader's "llava" type handles it (LlavaForConditionalGeneration for
+    # safetensors, Llava16ChatHandler for GGUF + mmproj). The hf_config feeds
+    # config/processor for the safetensors path; GGUF loads from local weights
+    # and never fetches it.
+    {
+        "pattern": re.compile(r"(?i)(joy.?caption)"),
+        "type": "llava",
+        "hf_config": "fancyfeast/llama-joycaption-beta-one-hf-llava",
     },
 ]
 
@@ -114,6 +150,29 @@ def detect_model(filename: str) -> dict | None:
                 entry["hf_config"] = rule["hf_config"]
             return entry
 
+    return None
+
+
+def hf_config_for(model_type: str, filename: str) -> str | None:
+    """Return the HF config repo for a family, sized from ``filename``.
+
+    Used when the family is forced manually (model profiles): the filename
+    may not match the family's pattern, so :func:`detect_model` cannot
+    resolve the repo. Size-variant rules read the size token from the
+    filename and fall back to the rule default. None for an unknown family.
+    """
+    stem = filename.lower()
+    for rule in _VISION_RULES:
+        if rule["type"] != model_type:
+            continue
+        if "hf_config_by_size" in rule:
+            size = next(
+                (s for s in rule["hf_config_by_size"] if s in stem), None
+            )
+            return rule["hf_config_by_size"].get(
+                size, rule["hf_config_default"]
+            )
+        return rule["hf_config"]
     return None
 
 

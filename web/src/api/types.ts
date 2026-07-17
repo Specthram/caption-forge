@@ -17,6 +17,51 @@ export interface ModelInfo {
   has_mmproj: boolean;
 }
 
+/** One model profile: weights + everything needed to load and run them. */
+export interface ModelProfile {
+  id: number;
+  name: string;
+  file: string;
+  dir: string;
+  format: "gguf" | "safetensors";
+  /** Family key ("" = unrecognized safetensors). */
+  type: string;
+  type_mode: "auto" | "manual";
+  temp: number;
+  n_ctx: number;
+  mmproj_mode: "auto" | "manual";
+  mmproj: string | null;
+  think: string;
+  max_tok: number;
+  img_res: number;
+  /** Default prompt preset title (within the profile's type). */
+  prompt: string;
+}
+
+export interface ProfileFamily {
+  key: string;
+  label: string;
+  think: boolean;
+  /** Offered in the editor's manual type list. */
+  manual: boolean;
+}
+
+export interface ProfilesResponse {
+  profiles: ModelProfile[];
+  active_id: number;
+  judge_id: number;
+  loaded_id: number | null;
+  families: ProfileFamily[];
+}
+
+/** Type/mmproj auto-detection result for a picked weights file. */
+export interface ProfileDetect {
+  type: string;
+  format: string | null;
+  mmproj: string | null;
+  name: string;
+}
+
 /** Live memory of the primary CUDA GPU (all figures in GB). */
 export interface GpuInfo {
   name: string;
@@ -174,7 +219,7 @@ export interface FileListing {
   path: string;
   parent: string | null;
   is_root: boolean;
-  entries: { name: string; path: string; kind: "dir" | "file" }[];
+  entries: { name: string; path: string; kind: "dir" | "file"; size?: number }[];
 }
 
 export interface MediaMeta {
@@ -334,6 +379,8 @@ export interface ComposeCandidatesPage {
   total: number;
   /** How many candidates exist before any filter. */
   pool: number;
+  /** Every filtered candidate id (not just the page) — "Select all". */
+  ids: number[];
   items: ComposeCandidate[];
   /** Map point of every filtered candidate, not just the page. */
   pool_points: [number, number][];
@@ -624,6 +671,8 @@ export interface AutobuildStudioConfig {
   libraries: { id: number; name: string }[];
   unhashed: number;
   unembedded: number;
+  /** Whether the composition (depth) index step runs on this machine. */
+  depth_enabled: boolean;
 }
 
 /** One reason chip shown under a pick's name (icon + short value + tip). */
@@ -700,6 +749,31 @@ export interface AutobuildStudioPreview {
     points: AutobuildMapPoint[];
     zones: AutobuildZone[];
   };
+  /**
+   * The Proximity view's fused resemblance graph over the picks: a sparse
+   * edge list of `[a, b, dinoSim, depthSim]` tuples, materialised whenever
+   * the fused `max(dinoSim, W·depthSim)` reaches `floor`. `dinoSim` is the
+   * DINOv2 appearance cosine, `depthSim` the Depth-Anything V2 composition
+   * cosine (0 when either endpoint lacks a depth signature). Node positions
+   * and quality ride the pick cards; only the links live here.
+   */
+  proximity: {
+    floor: number;
+    edges: [number, number, number, number][];
+  };
+  /**
+   * In-scope images (the build's own pool — the recipe's libraries and tag
+   * filters already applied) with no Depth-Anything V2 composition signature
+   * yet. Drives the Studio's composition advice, scoped to this build.
+   */
+  undepthed: number;
+  /**
+   * Locked/excluded recipe tags that no longer exist in the vocabulary (a
+   * saved recipe naming a since-deleted tag). The engine ignores them so the
+   * build is not silently emptied; the Studio surfaces them and drops them
+   * from the recipe chips.
+   */
+  stale_tags: string[];
   dominant_tag: { name: string; share: number } | null;
   semantic_available: boolean;
   grade: string;
@@ -878,7 +952,7 @@ export interface GroundingSize {
 export interface ReportRow {
   label: string;
   value: string;
-  tone: "ok" | "warn" | "danger" | "info" | "muted";
+  tone: "ok" | "warn" | "danger" | "info" | "muted" | "composition";
 }
 
 /** One scored pillar of the report (quality / diversity / hygiene). */
@@ -906,6 +980,25 @@ export interface ReportMapPoint {
   cluster: number;
   outlier: boolean;
   near_dup: boolean;
+  quality: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+/**
+ * One dot of the composition map — positioned in framing space (the 2-D
+ * projection of the Depth-Anything V2 signature) and coloured by visual
+ * `style` bucket, so re-skins (same framing, different style) read as
+ * different colours inside one framing cluster.
+ */
+export interface CompositionMapPoint {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  framing: number;
+  style: string;
+  reskin: boolean;
   quality: number | null;
   width: number | null;
   height: number | null;
@@ -1000,6 +1093,14 @@ export interface DatasetReport {
   map_points: ReportMapPoint[];
   clusters: number;
   spread: number;
+  /** Composition map: one dot per depth-embedded media, empty without depth. */
+  composition_map: CompositionMapPoint[];
+  /** Re-skin id pairs (same framing, different style) drawn as teal links. */
+  composition_links: [number, number][];
+  /** Distinct framing clusters over the depth signatures. */
+  framings: number;
+  /** Number of re-skin pairs. */
+  reskins: number;
   issues: ReportIssue[];
   recommendations: ReportRecommendation[];
   framing: [string, number, number, number | null][];
@@ -1158,4 +1259,49 @@ export interface WatermarkInventory {
   counts: Record<WatermarkTab, number>;
   total: number;
   tab: WatermarkTab;
+}
+
+// -- Rule-based caption review (the Review sub-tab) --------------------------
+
+export type ReviewRuleKind = "det" | "text" | "vlm";
+export type ReviewFindingStatus = "pending" | "accepted" | "rejected";
+
+export interface ReviewRule {
+  id: number;
+  dataset_id: number;
+  text: string;
+  kind: ReviewRuleKind;
+  needs_image: boolean;
+  enabled: boolean;
+  builtin: boolean;
+}
+
+export interface ReviewFinding {
+  id: number;
+  run_id: number;
+  media_id: number;
+  caption_type_id: number;
+  rule_id: number | null;
+  rule_kind: string;
+  rule_text: string | null;
+  note: string;
+  caption_before: string;
+  caption_after: string;
+  status: ReviewFindingStatus;
+  applied_caption: string | null;
+  dataset_id: number;
+  caption_type: string;
+  key: string;
+  stale: boolean;
+}
+
+export interface ReviewCounts {
+  pending: number;
+  accepted: number;
+  rejected: number;
+}
+
+export interface ReviewFindingsResponse {
+  findings: ReviewFinding[];
+  counts: ReviewCounts;
 }

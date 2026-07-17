@@ -520,6 +520,44 @@ def existing_tag_names(names) -> list:
     return [row["name"] for row in rows]
 
 
+def _normalized_tag(name) -> str:
+    """Lowercase, trim and fold whitespace to underscores for matching.
+
+    Mirrors :func:`src.framing.normalize_tag`, duplicated here so the low
+    level store keeps no dependency on the higher-level ``framing`` module.
+    """
+    return "_".join(str(name or "").strip().lower().split())
+
+
+def existing_normalized_tag_names(names) -> set:
+    """Return the subset of ``names`` some tag carries, matched normalized.
+
+    Like :func:`existing_tag_names` but case- and separator-insensitive: each
+    input name and every tag name are lowercased with whitespace folded to
+    underscores before matching, so a locked/excluded recipe tag resolves
+    whether it was saved as ``Upper Body`` or ``upper_body``. Lets a caller
+    tell a *deleted* tag apart from a live one. The match expression is not
+    index-backed, so this scans the tag table once — meant for the handful of
+    recipe tags it is asked about, never a hot per-item loop.
+
+    Returns
+    -------
+    set of str
+        The normalized names that exist (a subset of the normalized inputs).
+    """
+    wanted = {norm for norm in map(_normalized_tag, names or []) if norm}
+    if not wanted:
+        return set()
+    placeholders = ", ".join("?" for _ in wanted)
+    rows = _query_all(
+        "SELECT DISTINCT lower(replace(trim(name), ' ', '_')) AS norm "
+        f"FROM tag WHERE lower(replace(trim(name), ' ', '_')) IN "
+        f"({placeholders})",
+        tuple(wanted),
+    )
+    return {row["norm"] for row in rows}
+
+
 def find_tag_by_name(name: str):
     """Return the first tag matching ``name`` exactly (any category), or None.
 

@@ -376,6 +376,70 @@ CREATE TABLE IF NOT EXISTS dataset_triggerword (
     UNIQUE (dataset_id, triggerword_id)
 );
 
+-- Rule-based caption review (see src.caption_judge). A judge model, chosen
+-- independently from the captioner, checks each caption against rules written
+-- in plain language and scoped per dataset. ``kind`` selects the engine:
+-- 'det' is deterministic (regex / substring, no model), 'text' a text-only
+-- LLM pass, 'vlm' a vision judge. ``needs_image`` gates whether the image is
+-- loaded for the rule. ``builtin`` marks a shipped preset. Rules are never
+-- applied silently: they only ever produce ``review_finding`` rows.
+CREATE TABLE IF NOT EXISTS review_rule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dataset_id INTEGER NOT NULL
+        REFERENCES dataset (id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('det', 'text', 'vlm')),
+    needs_image INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One review run over a dataset. ``scope`` records what was targeted;
+-- ``judge_model`` the checkpoint that judged. A run over the whole dataset
+-- replaces its findings; a single-media run merges into the existing queue
+-- (see src.sqlite_store.review_queue).
+CREATE TABLE IF NOT EXISTS review_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dataset_id INTEGER NOT NULL
+        REFERENCES dataset (id) ON DELETE CASCADE,
+    judge_model TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT 'all'
+        CHECK (scope IN ('all', 'selection', 'flagged', 'single')),
+    total INTEGER NOT NULL DEFAULT 0,
+    findings_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+-- One proposed correction awaiting human validation. ``rule_id`` NULL marks
+-- an integrity finding (the src.caption_review heuristics), tagged with
+-- ``rule_kind = 'integrity'`` so the queue badges it without a join. ``note``
+-- is the judge's one-sentence verdict; ``caption_before`` / ``caption_after``
+-- feed the word diff shown in the queue and wizard. ``status`` is the human
+-- decision; ``applied_caption`` holds the final text when the user edited it
+-- before accepting.
+CREATE TABLE IF NOT EXISTS review_finding (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL
+        REFERENCES review_run (id) ON DELETE CASCADE,
+    media_id INTEGER NOT NULL
+        REFERENCES media (id) ON DELETE CASCADE,
+    caption_type_id INTEGER NOT NULL
+        REFERENCES caption_type (id) ON DELETE CASCADE,
+    rule_id INTEGER
+        REFERENCES review_rule (id) ON DELETE SET NULL,
+    rule_kind TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    caption_before TEXT NOT NULL DEFAULT '',
+    caption_after TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'accepted', 'rejected')),
+    applied_caption TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    decided_at TEXT
+);
+
 -- The last quality report of a dataset (Datasets → Quality report tab): a
 -- JSON blob of the whole evaluation, so the tab renders instantly on open
 -- instead of re-running the scorers. One row per dataset — a run replaces

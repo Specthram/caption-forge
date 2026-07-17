@@ -187,3 +187,56 @@ class TestInternalMediaDir:
         config.save_user_settings({"internal_media_dir": ""})
         settings._invalidate_cache()
         assert settings.get_internal_media_dir() is None
+
+
+class TestShippedJoyCaptionConfig:
+    """The shipped ``llava.json`` carries JoyCaption's documented defaults."""
+
+    def test_defaults(self):
+        """Temperature 0.6, 512-token ceiling, 12 prompts, one default."""
+        import json
+
+        path = config.DEFAULT_MODELS_DIR / "llava.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["settings"]["temperature"] == 0.6
+        assert data["settings"]["max_new_tokens"] == 512
+        prompts = data["prompts"]
+        assert len(prompts) == 12
+        defaults = [t for t, p in prompts.items() if p.get("default")]
+        assert defaults == ["Descriptive"]
+
+
+@pytest.fixture(name="model_dirs")
+def _model_dirs(tmp_path, monkeypatch):
+    """Redirect the default/user per-type model config dirs to a temp tree."""
+    monkeypatch.setattr(config, "DEFAULT_MODELS_DIR", tmp_path / "default")
+    monkeypatch.setattr(config, "USER_MODELS_DIR", tmp_path / "user")
+    return tmp_path
+
+
+class TestModelMaxNewTokens:
+    """Per-model-type token ceiling, with a factory fallback."""
+
+    def test_falls_back_to_default_when_unset(self, model_dirs):
+        """A type with no saved ceiling uses the factory default."""
+        from src.constants import DEFAULT_MAX_NEW_TOKENS
+
+        assert (
+            settings.get_model_max_new_tokens("qwen3")
+            == DEFAULT_MAX_NEW_TOKENS
+        )
+
+    def test_reads_saved_ceiling(self, model_dirs):
+        """A saved ``max_new_tokens`` is read back (JoyCaption's 512)."""
+        config.set_user_model_setting("llava", "max_new_tokens", 512)
+        assert settings.get_model_max_new_tokens("llava") == 512
+
+    def test_invalid_value_falls_back(self, model_dirs):
+        """A non-integer saved value falls back to the default."""
+        from src.constants import DEFAULT_MAX_NEW_TOKENS
+
+        config.set_user_model_setting("llava", "max_new_tokens", "oops")
+        assert (
+            settings.get_model_max_new_tokens("llava")
+            == DEFAULT_MAX_NEW_TOKENS
+        )

@@ -3,15 +3,60 @@
 import random
 
 from server.jobs import Progress
-from src import captioner, loader, settings, siglip_grounding, storage
+from src import (
+    captioner,
+    loader,
+    model_profiles,
+    settings,
+    siglip_grounding,
+    storage,
+)
 from src.media import is_video_file
 
 
 def _resolve_seed(seed) -> int:
-    """Return a concrete seed (a random one when the request left it out)."""
-    if seed is None:
+    """Return a concrete seed (a random one when the request left it out).
+
+    ``-1`` (the seed field's dice) is also "random each run": one concrete
+    seed is drawn here so the whole batch still shares it.
+    """
+    if seed is None or int(seed) == -1:
         return random.randint(0, 2**31 - 1)
     return int(seed)
+
+
+def _ensure_profile_loaded(profile_id, progress: Progress):
+    """Swap the captioner profile into VRAM when needed; return it.
+
+    None when the job carries no profile (legacy request: use whatever is
+    loaded). A profile already resident is kept; anything else — nothing
+    loaded, or a different profile — is lazy-swapped in, mirroring the
+    Load-model button.
+    """
+    if profile_id is None:
+        return None
+    profile = model_profiles.get_profile(profile_id)
+    if profile is None:
+        raise ValueError(f"unknown model profile {profile_id}")
+    if model_profiles.get_loaded_id() == profile_id:
+        return profile
+    cfg = model_profiles.load_cfg(profile)
+    if cfg is None:
+        raise ValueError(f"profile {profile['name']!r} has no weights file")
+    if loader.is_model_loaded():
+        progress(sub=f"swapping to {profile['name']}…")
+        for status, _loaded in loader.unload_model():
+            progress(sub=status)
+        model_profiles.set_loaded_id(None)
+    for status, _loaded in loader.load_model(cfg):
+        progress(sub=status)
+    if not loader.is_model_loaded():
+        raise RuntimeError(
+            f"could not load profile {profile['name']!r}: "
+            f"{loader.last_status}"
+        )
+    model_profiles.set_loaded_id(profile_id)
+    return profile
 
 
 def generate_body(params):
@@ -35,14 +80,22 @@ def generate_body(params):
             ]
         excluded = set(params.exclude_ids or [])
         keys = [key for key in keys if int(key) not in excluded]
+        if not params.recaption:
+            # Only fill the blanks: drop media whose caption already has
+            # content (one bulk query, not one read per media).
+            texts = storage.read_captions_bulk(
+                dataset_ref, [str(key) for key in keys], caption_type
+            )
+            keys = [key for key in keys if not texts.get(str(key), "").strip()]
         total = len(keys)
         progress(total=total, done=0, sub=f"0 / {total}")
+        profile = _ensure_profile_loaded(params.profile_id, progress)
         seed = _resolve_seed(params.seed)
         for index, key in enumerate(keys, start=1):
             key = str(key)
             path = storage.media_path(dataset_ref, key)
             if path:
-                text = _caption_one(path, params, seed)
+                text = _caption_one(path, params, seed, profile)
                 storage.write_caption(dataset_ref, key, caption_type, text)
                 if params.review_after:
                     storage.run_integrity_review(
@@ -52,29 +105,67 @@ def generate_body(params):
         grounded = 0
         if params.ground_after:
             grounded = _ground_all(progress, dataset_ref, keys, caption_type)
-        return {"done": total, "grounded": grounded}
+        findings = 0
+        if params.review_after:
+            findings = _review_all(progress, params, keys)
+        return {"done": total, "grounded": grounded, "findings": findings}
 
     return run
 
 
-def _caption_one(path: str, params, seed: int) -> str:
+def _review_all(progress: Progress, params, keys) -> int:
+    """Run the rule-based review over the freshly generated captions.
+
+    Chains the Review sub-tab's judge pass at the end of a generation (the
+    "Review after generation" toggle): the captioner has been freed by the
+    grounding pass (or is swapped out here), the judge is loaded for the run
+    and freed after, and every proposal lands as a *pending* finding — nothing
+    is applied without the human. Reuses the review job body so the det / text
+    / vision passes and the merge rule stay in one place.
+    """
+    # pylint: disable=import-outside-toplevel
+    from server.runners.review_run import review_run_body
+    from server.schemas import ReviewRunBody
+
+    body = ReviewRunBody(
+        dataset_id=params.dataset_id,
+        caption_type=params.caption_type,
+        media_ids=[int(key) for key in keys],
+        judge_profile_id=params.review_judge_profile_id,
+        scope="all",
+        seed=params.seed,
+    )
+    result = review_run_body(body)(progress)
+    return result.get("findings", 0)
+
+
+def _caption_one(path: str, params, seed: int, profile: dict | None) -> str:
     """Caption one media file (video vs image dispatch).
 
-    Videos read their fps / seconds / frame prompt from Settings inside
-    :func:`src.captioner.generate_captions_for_video`, so only the shared
-    parameters are passed here.
+    Generation params come from the captioner ``profile`` when the job
+    carries one, else from the request's legacy fields. Videos read their
+    fps / seconds / frame prompt from Settings inside
+    :func:`src.captioner.generate_captions_for_video` (the profile image
+    resolution is image-only), so only the shared parameters are passed.
     """
-    generate = (
-        captioner.generate_captions_for_video
-        if is_video_file(path)
-        else captioner.generate_caption
-    )
-    return generate(
+    temperature = profile["temp"] if profile else params.temperature
+    think_mode = profile["think"] if profile else params.think_mode
+    if is_video_file(path):
+        return captioner.generate_captions_for_video(
+            path,
+            params.prompt,
+            temperature,
+            seed,
+            think_mode=think_mode,
+        )
+    return captioner.generate_caption(
         path,
         params.prompt,
-        params.temperature,
+        temperature,
         seed,
-        think_mode=params.think_mode,
+        think_mode=think_mode,
+        max_new_tokens=profile["max_tok"] if profile else None,
+        image_size=profile["img_res"] if profile else None,
     )
 
 

@@ -16,6 +16,46 @@ class LoadModelBody(BaseModel):
     name: str
 
 
+class ProfileBody(BaseModel):
+    """Body for creating / updating a model profile.
+
+    Every field is optional: only the provided ones are applied (see
+    :func:`src.model_profiles.update_profile`); the rest keep their stored
+    (or factory) values. ``role`` is create-only: ``"caption"``/``"judge"``
+    selects the new profile for that slot.
+    """
+
+    name: str | None = None
+    file: str | None = None
+    dir: str | None = None
+    format: str | None = None
+    type: str | None = None
+    type_mode: str | None = None
+    temp: float | None = None
+    n_ctx: int | None = None
+    mmproj_mode: str | None = None
+    mmproj: str | None = None
+    think: str | None = None
+    max_tok: int | None = None
+    img_res: int | None = None
+    prompt: str | None = None
+    role: str | None = None
+
+
+class ProfileSelectBody(BaseModel):
+    """Body pointing the captioner or judge slot at a profile."""
+
+    role: str  # "caption" | "judge"
+    id: int
+
+
+class ProfileDetectBody(BaseModel):
+    """Body for re-running type/mmproj auto-detection on a picked file."""
+
+    dir: str
+    file: str
+
+
 class SaveCaptionBody(BaseModel):
     """Body for saving a caption on a media in a dataset.
 
@@ -77,12 +117,21 @@ class GenerateBody(BaseModel):
     media_ids: list[int] | None = None  # None = the whole dataset
     exclude_ids: list[int] | None = None  # locked media, never captioned
     prompt: str
+    # Captioner profile: generation params (temperature, thinking, image
+    # size, max tokens) come from it, and the job lazy-swaps it into VRAM
+    # when a different profile is resident. None = use the loaded model
+    # with the legacy field values below.
+    profile_id: int | None = None
     temperature: float = 0.7
     seed: int | None = None
     think_mode: str = "auto"
     image_size: int = 1024
     review_after: bool = False
+    review_judge_profile_id: int | None = None  # judge for review_after
     ground_after: bool = False
+    # Off = caption only media whose caption is still empty; on (default)
+    # regenerates every targeted media, already-captioned ones included.
+    recaption: bool = True
 
 
 class DeployBody(BaseModel):
@@ -123,6 +172,47 @@ class ReviewTargetBody(BaseModel):
 
 class GroundTargetBody(ReviewTargetBody):
     """Body identifying one caption to ground (or re-heat) in a dataset."""
+
+
+class ReviewRuleCreateBody(BaseModel):
+    """Body creating one custom review rule for a dataset."""
+
+    dataset_id: int
+    text: str
+    needs_image: bool = False
+
+
+class ReviewRuleUpdateBody(BaseModel):
+    """Body toggling or rewriting one review rule."""
+
+    enabled: bool | None = None
+    text: str | None = None
+
+
+class ReviewRunBody(BaseModel):
+    """Body for a rule-based review run over a dataset (or a single media)."""
+
+    dataset_id: int
+    caption_type: str
+    media_ids: list[int] | None = None  # None = the whole dataset
+    judge_profile_id: int | None = None  # None = use the loaded model
+    scope: str = "all"  # all | selection | flagged | single
+    rule_ids: list[int] | None = None  # None = every enabled rule
+    seed: int | None = None
+
+
+class ReviewDecideBody(BaseModel):
+    """Body recording a human decision on one finding."""
+
+    action: str  # accept | reject
+    caption: str | None = None  # inline-edited text applied on accept
+
+
+class ReviewBulkDecideBody(BaseModel):
+    """Body for the bulk-accept actions (safe fixes / all from a rule)."""
+
+    dataset_id: int
+    rule_id: int | None = None  # None = every safe (det + integrity) finding
 
 
 class CaptionScoreBody(ReviewTargetBody):
@@ -246,6 +336,10 @@ class AutobuildPreviewBody(BaseModel):
     forced: list[int] = []
     kept: list[int] = []
     rebal: bool = False
+    # A pick edit (drop/force/keep/rebalance) reuses the last Build's pool
+    # and geometry instead of rereading the whole library; a fresh Build
+    # leaves this false so index/quality changes are picked up.
+    reuse_pool: bool = False
 
 
 class AutobuildNeighborsBody(BaseModel):
@@ -283,6 +377,18 @@ class AutobuildCreateBody(BaseModel):
     """
 
     name: str
+    selection: list[int]
+    recipe: dict | None = None
+
+
+class AutobuildUpdateBody(BaseModel):
+    """Body for overwriting an existing dataset from a Studio selection.
+
+    The re-edit's "overwrite" save: the dataset keeps its id and name, its
+    media are replaced by ``selection`` and its stored ``recipe`` is
+    refreshed so a later re-edit reopens the new state.
+    """
+
     selection: list[int]
     recipe: dict | None = None
 

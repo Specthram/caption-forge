@@ -11,8 +11,9 @@ from server.schemas import (
     AutobuildCreateBody,
     AutobuildNeighborsBody,
     AutobuildPreviewBody,
+    AutobuildUpdateBody,
 )
-from src import embeddings, quality
+from src import embeddings, index_steps, quality, settings
 from src import sqlite_store as store
 
 router = APIRouter(prefix="/api/autobuild", tags=["autobuild"])
@@ -37,6 +38,7 @@ def autobuild_config() -> dict:
         ],
         "unhashed": store.count_media_without_hash(),
         "unembedded": store.count_media_without_embedding(embeddings.MODEL_ID),
+        "depth_enabled": settings.is_index_step_enabled(index_steps.DEPTH),
     }
 
 
@@ -110,4 +112,19 @@ def create(body: AutobuildCreateBody) -> dict:
         dataset_id = engine.create(body.name, body.selection, body.recipe)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": dataset_id}
+
+
+@router.get("/recipe/{dataset_id}")
+def recipe(dataset_id: int) -> dict:
+    """Return a dataset's stored Studio recipe, for re-editing."""
+    return engine.get_recipe(dataset_id)
+
+
+@router.post("/update/{dataset_id}")
+def update(dataset_id: int, body: AutobuildUpdateBody) -> dict:
+    """Overwrite a dataset's media from a Studio selection; re-store recipe."""
+    if not body.selection:
+        raise HTTPException(status_code=400, detail="empty selection")
+    engine.update(dataset_id, body.selection, body.recipe)
     return {"id": dataset_id}

@@ -43,6 +43,9 @@ export const colors = {
   info: "#6fa8dc",
   fav: "#e06c9d",
   greenAlt: "#8bc48a",
+  // Composition (Depth-Anything V2) — the re-skin signal fused into the
+  // auto-builder's Proximity graph and the depth index step's dot.
+  composition: "#5ac7c0",
 
   // Grounding (SigLIP) — its own cool-blue surface, so the grounding card
   // reads as a measurement panel rather than another ember-accented action.
@@ -122,6 +125,26 @@ export function groundingColor(
   return colors.danger;
 }
 
+/** Type badge colour of a model-profile family (see src/model_profiles.py). */
+export function profileTypeColor(key: string): string {
+  switch (key) {
+    case "qwen3":
+    case "qwen3.6":
+      return colors.info;
+    case "gemma3":
+    case "gemma3n":
+      return colors.greenAlt;
+    case "gemma4":
+      return colors.composition;
+    case "mistral3":
+      return colors.warn;
+    case "llava":
+      return colors.fav;
+    default:
+      return colors.catGeneral;
+  }
+}
+
 /** Dot colour of an Index-pipeline step (src/index_steps.py keys). */
 export function stepColor(key: string): string {
   switch (key) {
@@ -131,6 +154,8 @@ export function stepColor(key: string): string {
       return colors.info;
     case "embed":
       return colors.accent;
+    case "depth":
+      return colors.composition;
     case "wd14":
       return colors.fav;
     default:
@@ -167,9 +192,28 @@ export function toneColor(tone: string): string {
       return colors.danger;
     case "info":
       return colors.info;
+    case "composition":
+      return colors.composition;
     default:
       return colors.textMuted;
   }
+}
+
+/**
+ * Node palette of the composition map — the five coarse "visual style"
+ * buckets (see `src/hue_bucket.py`). Colouring by style makes a re-skin
+ * (same framing, different style) legible inside one framing cluster.
+ */
+export const compositionStyleColors: Record<string, string> = {
+  warm: "#e0885a",
+  cool: "#6fa8dc",
+  neutral: "#9aa0aa",
+  green: "#8bc48a",
+  pink: "#e06c9d",
+} as const;
+
+export function styleColor(key: string): string {
+  return compositionStyleColors[key] ?? colors.textMuted;
 }
 
 /** Cluster palette of the diversity map (wraps past six clusters). */

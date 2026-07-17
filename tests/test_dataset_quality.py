@@ -166,6 +166,94 @@ class TestDiversityPillar:
         assert pillar.score == 87.5
 
 
+class TestCompositionPillar:
+    """Tests for the Depth-Anything V2 composition pillar and map."""
+
+    def test_no_depth_leaves_the_pillar_unscored(self):
+        """Without depth signatures the pillar is diagnostic-only."""
+        snapshot = _snapshot([_media(1, 70.0), _media(2, 70.0)])
+        pillar = dataset_quality.evaluate(snapshot).pillars[2]
+        assert pillar.key == "composition"
+        assert pillar.score is None
+
+    def test_varied_framings_score_high(self):
+        """Orthogonal depth signatures fill the composition scale."""
+        depth = {
+            1: np.array([1.0, 0.0, 0.0]),
+            2: np.array([0.0, 1.0, 0.0]),
+            3: np.array([0.0, 0.0, 1.0]),
+        }
+        snapshot = _snapshot(
+            [_media(1, 70.0), _media(2, 70.0), _media(3, 70.0)],
+            depth_vectors_by_id=depth,
+        )
+        report = dataset_quality.evaluate(snapshot)
+        assert report.pillars[2].score == 100.0
+        assert report.framings >= 1
+        assert len(report.composition_map) == 3
+
+    def test_reskin_is_close_in_depth_far_in_appearance(self):
+        """Same framing, different style: depth close, DINOv2 far."""
+        vectors = {1: np.array([1.0, 0.0]), 2: np.array([0.0, 1.0])}
+        depth = {1: np.array([1.0, 0.0]), 2: np.array([0.999, 0.045])}
+        snapshot = _snapshot(
+            [_media(1, 70.0), _media(2, 70.0)],
+            vectors_by_id=vectors,
+            depth_vectors_by_id=depth,
+        )
+        report = dataset_quality.evaluate(snapshot)
+        assert report.reskins == 1
+        assert report.composition_links == ((1, 2),)
+        assert all(point.reskin for point in report.composition_map)
+        rows = {row.label: row.value for row in report.pillars[2].rows}
+        assert rows["composition re-skins"] == "1"
+
+    def test_reskin_catches_the_resemblance_band(self):
+        """Same framing, DINOv2 in 0.85–0.92: a re-skin, not a near-dup.
+
+        The pair DINOv2 reads at 0.88 (moderately restyled, same framing)
+        used to fall through both lists; the report now flags it as a
+        composition re-skin.
+        """
+        vectors = {1: np.array([1.0, 0.0]), 2: np.array([0.88, 0.475])}
+        depth = {1: np.array([1.0, 0.0]), 2: np.array([1.0, 0.0])}
+        report = dataset_quality.evaluate(
+            _snapshot(
+                [_media(1, 70.0), _media(2, 70.0)],
+                vectors_by_id=vectors,
+                depth_vectors_by_id=depth,
+            )
+        )
+        assert report.reskins == 1
+
+    def test_near_duplicate_is_not_a_reskin(self):
+        """A pair DINOv2 calls a near-dup (>=0.92) is never a re-skin."""
+        vectors = {1: np.array([1.0, 0.0]), 2: np.array([0.95, 0.312])}
+        depth = {1: np.array([1.0, 0.0]), 2: np.array([1.0, 0.0])}
+        report = dataset_quality.evaluate(
+            _snapshot(
+                [_media(1, 70.0), _media(2, 70.0)],
+                vectors_by_id=vectors,
+                depth_vectors_by_id=depth,
+            )
+        )
+        assert report.reskins == 0
+
+    def test_style_bucket_rides_the_points(self):
+        """Each map dot carries its media's style bucket, neutral default."""
+        depth = {1: np.array([1.0, 0.0]), 2: np.array([0.0, 1.0])}
+        snapshot = _snapshot(
+            [_media(1, 70.0), _media(2, 70.0)],
+            depth_vectors_by_id=depth,
+            styles_by_id={1: "warm"},
+        )
+        points = {
+            point.id: point.style
+            for point in dataset_quality.evaluate(snapshot).composition_map
+        }
+        assert points == {1: "warm", 2: "neutral"}
+
+
 class TestHygienePillar:
     """Tests for the structural-readiness pillar."""
 
@@ -175,7 +263,7 @@ class TestHygienePillar:
             [_media(1, 70.0), _media(2, 70.0)],
             captions_by_id={1: "A cat.", 2: "A dog."},
         )
-        assert dataset_quality.evaluate(snapshot).pillars[2].score == 100.0
+        assert dataset_quality.evaluate(snapshot).pillars[3].score == 100.0
 
     def test_missing_caption_lowers_coverage(self):
         """An uncaptioned image costs half of the coverage component."""
@@ -183,7 +271,7 @@ class TestHygienePillar:
             [_media(1, 70.0), _media(2, 70.0)],
             captions_by_id={1: "A cat.", 2: ""},
         )
-        pillar = dataset_quality.evaluate(snapshot).pillars[2]
+        pillar = dataset_quality.evaluate(snapshot).pillars[3]
         assert pillar.score == 87.5  # (50 + 100 + 100 + 100) / 4
 
     def test_small_images_lower_the_resolution_row(self):
@@ -192,7 +280,7 @@ class TestHygienePillar:
             [_media(1, 70.0, width=512, height=512)],
             captions_by_id={1: "A cat."},
         )
-        pillar = dataset_quality.evaluate(snapshot).pillars[2]
+        pillar = dataset_quality.evaluate(snapshot).pillars[3]
         rows = {row.label: row.value for row in pillar.rows}
         assert rows["resolution ≥ 1024px"] == "0 / 1"
         assert pillar.score == 75.0  # (100 + 100 + 100 + 0) / 4
@@ -208,7 +296,7 @@ class TestHygienePillar:
             [_media(1, 70.0, width=None, height=None)],
             captions_by_id={1: ""},
         )
-        pillar = dataset_quality.evaluate(snapshot).pillars[2]
+        pillar = dataset_quality.evaluate(snapshot).pillars[3]
         rows = {row.label: row.value for row in pillar.rows}
         assert rows["resolution ≥ 1024px"] == "not indexed"
         assert pillar.score == pytest.approx(200 / 3)  # (0 + 100 + 100) / 3
@@ -220,7 +308,7 @@ class TestHygienePillar:
             _media(2, 70.0, sha256="same"),
         ]
         snapshot = _snapshot(images, captions_by_id={1: "A.", 2: "B."})
-        pillar = dataset_quality.evaluate(snapshot).pillars[2]
+        pillar = dataset_quality.evaluate(snapshot).pillars[3]
         rows = {row.label: row.value for row in pillar.rows}
         assert rows["exact duplicates"] == "1"
 
@@ -229,28 +317,36 @@ class TestOverallScore:
     """Tests for the weighted global grade."""
 
     def test_weighted_mean_of_the_pillars(self):
-        """The grade weights quality 0.40, diversity 0.35, hygiene 0.25."""
+        """The grade weights the four pillars 0.35/0.30/0.15/0.20."""
         pillars = (
             dataset_quality.Pillar("quality", "", 100.0, ""),
             dataset_quality.Pillar("diversity", "", 0.0, ""),
+            dataset_quality.Pillar("composition", "", 100.0, ""),
             dataset_quality.Pillar("hygiene", "", 100.0, ""),
         )
         score = dataset_quality.overall_score(
             pillars, dataset_quality.DEFAULT_WEIGHTS
         )
-        assert score == 65.0
+        # 100*0.35 + 0*0.30 + 100*0.15 + 100*0.20 = 70.
+        assert score == 70.0
 
     def test_unscored_pillars_renormalize_the_weights(self):
-        """A pillar with no signal is dropped, not counted as zero."""
+        """A pillar with no signal is dropped, not counted as zero.
+
+        A dataset with no depth signature (composition None) therefore scores
+        almost exactly as it did before the pillar existed — the remaining
+        weights renormalize back to roughly the old 0.40/0.35/0.25 split.
+        """
         pillars = (
             dataset_quality.Pillar("quality", "", 80.0, ""),
             dataset_quality.Pillar("diversity", "", None, ""),
+            dataset_quality.Pillar("composition", "", None, ""),
             dataset_quality.Pillar("hygiene", "", 60.0, ""),
         )
         score = dataset_quality.overall_score(
             pillars, dataset_quality.DEFAULT_WEIGHTS
         )
-        assert round(score, 4) == round((80 * 0.4 + 60 * 0.25) / 0.65, 4)
+        assert round(score, 4) == round((80 * 0.35 + 60 * 0.20) / 0.55, 4)
 
     def test_nothing_scorable_is_none(self):
         """No scorable pillar means no grade."""

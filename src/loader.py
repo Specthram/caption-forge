@@ -26,14 +26,9 @@ from pathlib import Path
 
 import torch
 from transformers import (
+    AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
-    Qwen2_5_VLForConditionalGeneration,
-    Qwen3VLForConditionalGeneration,
-    Gemma3ForConditionalGeneration,
-    Gemma3nForConditionalGeneration,
-    Gemma4ForConditionalGeneration,
-    LlavaForConditionalGeneration,
 )
 
 from src import hf_assets
@@ -84,7 +79,7 @@ except ImportError:
 # Global (server-singleton) model state.
 model = None
 processor = None
-current_model_type = None  # family: qwen3 / gemma3 / gemma3n / llava / qwen2.5
+current_model_type = None  # family: qwen3 / gemma3 / llava / mistral3 / …
 current_format = None  # "transformers" | "gguf-text" | "gguf-vision"
 last_status = "Ready."  # last status line, survives page reloads
 loaded_name = None  # filename of the currently loaded model
@@ -99,6 +94,10 @@ if LLAMA_CPP_AVAILABLE:
         "gemma3n": "Gemma3ChatHandler",
         "gemma4": "Gemma4ChatHandler",
         "llava": "Llava16ChatHandler",
+        # Mistral Small 3.2 / Pixtral and Qwen3.6: the generic mtmd handler
+        # reads the model's chat template straight from the GGUF metadata.
+        "mistral3": "GenericMTMDChatHandler",
+        "qwen3.6": "GenericMTMDChatHandler",
     }
     _GGUF_VISION_HANDLERS = {
         fam: getattr(_lcf, name)
@@ -214,16 +213,6 @@ def _prepare_model_dir(hf_config_id: str, local_weights: Path) -> Path:
     return model_dir
 
 
-_MODEL_CLASSES = {
-    "qwen2.5": Qwen2_5_VLForConditionalGeneration,
-    "qwen3": Qwen3VLForConditionalGeneration,
-    "gemma3": Gemma3ForConditionalGeneration,
-    "gemma3n": Gemma3nForConditionalGeneration,
-    "gemma4": Gemma4ForConditionalGeneration,
-    "llava": LlavaForConditionalGeneration,
-}
-
-
 # --- safetensors (transformers) ---
 
 
@@ -236,12 +225,6 @@ def _load_local(local_path: Path, hf_config_id: str, model_type: str):
     # local weights, so from_pretrained loads them with the HF config.
     model_dir = _prepare_model_dir(hf_config_id, local_path)
 
-    model_class = _MODEL_CLASSES.get(model_type)
-    if model_class is None:
-        raise ValueError(
-            f"Unsupported model type for local loading: {model_type!r}"
-        )
-
     # local_files_only: the config/processor are guaranteed present (assembled
     # by _prepare_model_dir), so transformers must not reach the network here.
     use_fast = model_type == "llava"
@@ -252,13 +235,17 @@ def _load_local(local_path: Path, hf_config_id: str, model_type: str):
         local_files_only=True,
     )
 
-    # Let transformers handle tied weights, buffers, dtype and placement.
-    model, info = model_class.from_pretrained(
+    # AutoModelForImageTextToText resolves the concrete architecture from the
+    # config, so every image-text-to-text family (and any future one the
+    # installed transformers knows, or that ships its own modeling code) loads
+    # through this single call — no per-family class table to maintain.
+    model, info = AutoModelForImageTextToText.from_pretrained(
         str(model_dir),
         dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         output_loading_info=True,
         local_files_only=True,
+        trust_remote_code=True,
     )
 
     # ComfyUI text-encoder safetensors use a different key layout and often
@@ -284,8 +271,17 @@ def _load_local(local_path: Path, hf_config_id: str, model_type: str):
 # --- GGUF (llama-cpp) ---
 
 
-def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
-    """Load a local GGUF vision model (weights + mmproj) via llama-cpp."""
+def _load_gguf_vision(
+    local_path: Path,
+    mmproj_path: Path,
+    model_type: str,
+    n_ctx: int | None = None,
+):
+    """Load a local GGUF vision model (weights + mmproj) via llama-cpp.
+
+    ``n_ctx`` overrides the global context-size setting (model profiles);
+    ``None`` keeps the Settings value.
+    """
     global model, processor, current_model_type, current_format
 
     if not LLAMA_CPP_AVAILABLE:
@@ -309,13 +305,26 @@ def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
             "llama-cpp version (no chat handler available). Use the "
             ".safetensors version instead."
         )
-    chat_handler = handler_cls(clip_model_path=str(mmproj_path), verbose=False)
+    # The generic mtmd handler (Mistral 3.2 / Pixtral) takes an explicit
+    # ``chat_format`` (None → read the template from the GGUF metadata) and a
+    # required ``mmproj_path``; the family handlers fix their own template and
+    # accept the legacy ``clip_model_path`` alias instead.
+    if handler_cls.__name__ == "GenericMTMDChatHandler":
+        chat_handler = handler_cls(
+            chat_format=None,
+            mmproj_path=str(mmproj_path),
+            verbose=False,
+        )
+    else:
+        chat_handler = handler_cls(
+            clip_model_path=str(mmproj_path), verbose=False
+        )
 
     try:
         model = Llama(
             model_path=str(local_path),
             chat_handler=chat_handler,
-            n_ctx=get_gguf_n_ctx(),
+            n_ctx=n_ctx if n_ctx is not None else get_gguf_n_ctx(),
             n_gpu_layers=-1 if device == "cuda" else 0,
             n_batch=512,
             verbose=False,
@@ -333,8 +342,16 @@ def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
     current_format = "gguf-vision"
 
 
-def _load_gguf_text(weights_path: str, processor_repo: str):
-    """Load a local text-only GGUF model via llama-cpp."""
+def _load_gguf_text(
+    weights_path: str,
+    processor_repo: str,
+    model_type: str,
+    n_ctx: int | None = None,
+):
+    """Load a local text-only GGUF model via llama-cpp.
+
+    ``n_ctx`` overrides the global context-size setting (model profiles).
+    """
     global model, processor, current_model_type, current_format
 
     if not LLAMA_CPP_AVAILABLE:
@@ -347,7 +364,7 @@ def _load_gguf_text(weights_path: str, processor_repo: str):
 
     model = Llama(
         model_path=weights_path,
-        n_ctx=get_gguf_n_ctx(),
+        n_ctx=n_ctx if n_ctx is not None else get_gguf_n_ctx(),
         n_gpu_layers=-1 if device == "cuda" else 0,
         n_batch=512,
         verbose=False,
@@ -359,7 +376,10 @@ def _load_gguf_text(weights_path: str, processor_repo: str):
     # to a built-in template.
     processor = _load_local_processor(processor_repo)
 
-    current_model_type = "gemma3"
+    # Preserve the detected family so the UI shows this model's own prompts and
+    # generation defaults — not a hardcoded one. Its chat template comes from
+    # the processor above (built-in fallback when absent).
+    current_model_type = model_type
     current_format = "gguf-text"
 
 
@@ -367,9 +387,11 @@ def _load_local_processor(hf_config_id: str):
     """Load a processor from local HF config files only, or None.
 
     Used by the text-only GGUF path for its chat template. Never reaches the
-    network: when the config is absent locally, returns None.
+    network: when the config is absent locally, returns None. A profile with
+    no known HF repo (text-only fallback) passes None and gets the built-in
+    template.
     """
-    if hf_assets.missing_hf_files(hf_config_id):
+    if not hf_config_id or hf_assets.missing_hf_files(hf_config_id):
         return None
     config_src = str(hf_assets.hf_config_dir(hf_config_id))
     try:
@@ -457,6 +479,7 @@ def _load_model(model_cfg: dict):
                     Path(model_cfg["local_path"]),
                     Path(model_cfg["mmproj_path"]),
                     model_type,
+                    n_ctx=model_cfg.get("n_ctx"),
                 )
                 loaded_name = name
                 yield (
@@ -466,7 +489,10 @@ def _load_model(model_cfg: dict):
                 )
             else:
                 _load_gguf_text(
-                    str(model_cfg["local_path"]), model_cfg["hf_config"]
+                    str(model_cfg["local_path"]),
+                    model_cfg["hf_config"],
+                    model_type,
+                    n_ctx=model_cfg.get("n_ctx"),
                 )
                 loaded_name = name
                 yield (
