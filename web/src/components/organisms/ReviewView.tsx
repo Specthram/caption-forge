@@ -49,6 +49,7 @@ export function ReviewView() {
   const runReview = useRunReview();
   const profiles = useProfiles();
   const [scope, setScope] = useState("all");
+  const [unloadAfter, setUnloadAfter] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJobsStore((state) =>
     jobId ? state.jobs[jobId] : undefined,
@@ -105,6 +106,7 @@ export function ReviewView() {
         media_ids: mediaIds,
         judge_profile_id: profiles.data?.judge_id ?? null,
         scope,
+        unload_after: unloadAfter,
       },
       { onSuccess: (data) => setJobId(data.job_id) },
     );
@@ -125,6 +127,8 @@ export function ReviewView() {
         running={running}
         job={job}
         onRun={run}
+        unloadAfter={unloadAfter}
+        onUnloadAfter={setUnloadAfter}
       />
       <Queue
         datasetId={datasetId}
@@ -156,6 +160,8 @@ function Rail({
   running,
   job,
   onRun,
+  unloadAfter,
+  onUnloadAfter,
 }: {
   datasetId: number;
   rules: ReviewRule[];
@@ -165,6 +171,8 @@ function Rail({
   running: boolean;
   job: JobLike | undefined;
   onRun: () => void;
+  unloadAfter: boolean;
+  onUnloadAfter: (value: boolean) => void;
 }) {
   const profiles = useProfiles();
   const createRule = useCreateReviewRule();
@@ -299,6 +307,14 @@ function Rail({
             ▶ Run review
           </Button>
         )}
+        <label style={checkRow}>
+          <input
+            type="checkbox"
+            checked={unloadAfter}
+            onChange={(event) => onUnloadAfter(event.target.checked)}
+          />
+          Unload the model after the run
+        </label>
         <p style={hintStyle}>
           Text-only rules run without loading images; vision rules load each
           one. Locked captions are skipped. Judge: {judgeLabel}.

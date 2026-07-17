@@ -51,6 +51,7 @@ export function BatchBar() {
         : null,
       ground_after: gen.groundAfter,
       recaption: gen.recaption,
+      unload_after: gen.unloadAfter,
     });
 
   const addTagToAll = async () => {

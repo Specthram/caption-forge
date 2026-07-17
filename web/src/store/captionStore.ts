@@ -19,6 +19,8 @@ interface CaptionState {
   reviewAfter: boolean;
   /** Off = only caption media whose caption is still empty. */
   recaption: boolean;
+  /** On = free the VRAM when the job ends (off keeps the model loaded). */
+  unloadAfter: boolean;
   /** Chain a SigLIP grounding pass on every freshly written caption. */
   groundAfter: boolean;
   locked: Set<string>;
@@ -33,6 +35,7 @@ export const useCaptionStore = create<CaptionState>((set) => ({
   seed: "-1",
   reviewAfter: false,
   recaption: true,
+  unloadAfter: false,
   groundAfter: false,
   locked: new Set(),
 

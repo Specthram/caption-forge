@@ -140,6 +140,7 @@ export function CaptionLeftPanel() {
         review_judge_profile_id: gen.reviewAfter ? data.judge_id : null,
         ground_after: gen.groundAfter,
         recaption: gen.recaption,
+        unload_after: gen.unloadAfter,
       },
       {
         onSuccess: (result) => {
@@ -334,6 +335,16 @@ export function CaptionLeftPanel() {
             Only media whose caption is still empty will be captioned.
           </div>
         )}
+        <label style={checkboxRow}>
+          <input
+            type="checkbox"
+            checked={gen.unloadAfter}
+            onChange={(event) =>
+              gen.set({ unloadAfter: event.target.checked })
+            }
+          />
+          Unload the model after the job
+        </label>
         <label style={checkboxRow}>
           <input
             type="checkbox"

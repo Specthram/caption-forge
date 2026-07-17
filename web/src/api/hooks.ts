@@ -764,6 +764,8 @@ export interface GenerateVars {
   ground_after: boolean;
   /** Off = only caption media whose caption is still empty. */
   recaption: boolean;
+  /** On = free the VRAM when the job ends (default: model stays loaded). */
+  unload_after?: boolean;
 }
 
 export function useGenerate() {
@@ -890,6 +892,7 @@ export function useRunReview() {
       scope: string;
       rule_ids?: number[] | null;
       seed?: number | null;
+      unload_after?: boolean;
     }) => api.post<{ job_id: string }>("/review/run", vars),
   });
 }

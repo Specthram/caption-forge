@@ -108,6 +108,10 @@ def generate_body(params):
         findings = 0
         if params.review_after:
             findings = _review_all(progress, params, keys)
+        if params.unload_after and loader.is_model_loaded():
+            progress(sub="freeing the model…")
+            for status, _done in loader.unload_model():
+                progress(sub=status)
         return {"done": total, "grounded": grounded, "findings": findings}
 
     return run
