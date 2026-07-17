@@ -956,11 +956,8 @@ def record_review_finding(
 def _apply_accept(finding: dict, caption: str = None) -> None:
     """Write the accepted caption as a new revision for a finding's media.
 
-    The finding's fix is merged into the *live* caption
-    (:func:`src.caption_judge.apply_fix`), never written verbatim: accepting
-    a second finding must not resurrect the run-time caption and erase the
-    first accept (or a manual edit made since the run). An explicit
-    ``caption`` (inline edit before accept) still wins as-is.
+    The fix is merged into the *live* caption (never written verbatim) so a
+    second accept keeps the first; an explicit ``caption`` wins as-is.
     """
     type_row = store.get_caption_type(finding["caption_type_id"])
     caption_type = type_row["name"] if type_row else ""
@@ -980,8 +977,7 @@ def _apply_accept(finding: dict, caption: str = None) -> None:
         finding["id"], store.STATUS_ACCEPTED, applied_caption=final
     )
     # Rebase the media's other pending findings onto the new caption: their
-    # "original" then shows this accept applied, and their proposal is the
-    # same fix re-applied on top — the next accept diffs against reality.
+    # "original" shows this accept applied, their proposal the fix on top.
     for sibling in store.pending_for_media(
         finding["dataset_id"],
         finding["media_id"],
@@ -996,10 +992,7 @@ def _apply_accept(finding: dict, caption: str = None) -> None:
 def decide_review_finding(
     finding_id: int, action: str, caption: str = None
 ) -> dict:
-    """Accept (write a new revision) or reject one finding; return it.
-
-    ``caption`` overrides the proposed text (an inline edit before accept).
-    """
+    """Accept (``caption`` = inline-edit override) or reject one finding."""
     finding = store.get_finding(finding_id)
     if finding is None:
         return {}
@@ -1048,6 +1041,20 @@ def accept_rule_fixes(dataset_ref, rule_id: int) -> int:
     for finding in findings:
         _apply_accept(finding)
     return len(findings)
+
+
+def reject_all_findings(dataset_ref) -> int:
+    """Reject every pending finding of a dataset; return the count."""
+    dataset_id = _dataset_id(dataset_ref)
+    return 0 if dataset_id is None else store.reject_all_pending(dataset_id)
+
+
+def clear_review_history(dataset_ref) -> int:
+    """Delete the dataset's decided findings (history); return the count."""
+    dataset_id = _dataset_id(dataset_ref)
+    if dataset_id is None:
+        return 0
+    return store.clear_decided_findings(dataset_id)
 
 
 def media_path(dataset_ref, key: str) -> str | None:

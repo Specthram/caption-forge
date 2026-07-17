@@ -313,6 +313,40 @@ def decide_finding(
     )
 
 
+def reject_all_pending(dataset_id: int) -> int:
+    """Reject every pending finding of a dataset; return how many.
+
+    Rejecting never touches a caption, so one UPDATE is enough — no
+    per-finding apply pass like the bulk accepts.
+    """
+    with closing(db.connect()) as conn:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE review_finding SET status = ?, "
+                "decided_at = datetime('now') "
+                "WHERE status = ? AND run_id IN "
+                "(SELECT id FROM review_run WHERE dataset_id = ?)",
+                (STATUS_REJECTED, STATUS_PENDING, dataset_id),
+            )
+            return cursor.rowcount
+
+
+def clear_decided_findings(dataset_id: int) -> int:
+    """Delete a dataset's decided findings (the history); return how many.
+
+    Pending findings stay; accepted captions keep their revisions (this
+    only clears the queue's history, never a caption).
+    """
+    with closing(db.connect()) as conn:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM review_finding WHERE status != ? AND run_id IN "
+                "(SELECT id FROM review_run WHERE dataset_id = ?)",
+                (STATUS_PENDING, dataset_id),
+            )
+            return cursor.rowcount
+
+
 def reopen_finding(finding_id: int) -> None:
     """Return a decided finding to ``pending`` (the undo path)."""
     _write(

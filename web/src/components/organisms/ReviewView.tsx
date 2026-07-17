@@ -13,8 +13,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCreateReviewRule,
+  useClearReviewHistory,
   useDecideBulk,
   useDecideFinding,
+  useRejectAll,
   useDeleteReviewRule,
   useProfiles,
   useReviewFindings,
@@ -441,6 +443,9 @@ function Queue({
   onOpenWizard: (index: number) => void;
 }) {
   const decideBulk = useDecideBulk();
+  const rejectAll = useRejectAll();
+  const clearHistory = useClearReviewHistory();
+  const decidedCount = counts.accepted + counts.rejected;
   const safeCount = list.filter(
     (f) => f.status === "pending" && SAFE_KINDS.has(f.rule_kind),
   ).length;
@@ -485,6 +490,43 @@ function Queue({
         <CountChip n={counts.accepted} label="accepted" color={colors.ok} />
         <CountChip n={counts.rejected} label="rejected" color={colors.danger} />
         <div style={{ flex: 1 }} />
+        {decidedCount > 0 && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Clear the review history (${decidedCount} decided ` +
+                    "findings)? Captions are not touched.",
+                )
+              ) {
+                clearHistory.mutate({ dataset_id: datasetId });
+              }
+            }}
+            loading={clearHistory.isPending}
+          >
+            🗑 Clear history · {decidedCount}
+          </Button>
+        )}
+        {counts.pending > 0 && (
+          <Button
+            variant="ghost"
+            style={{ color: colors.danger, borderColor: colors.danger }}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Reject all ${counts.pending} pending findings? ` +
+                    "Captions are not touched.",
+                )
+              ) {
+                rejectAll.mutate({ dataset_id: datasetId });
+              }
+            }}
+            loading={rejectAll.isPending}
+          >
+            ✕ Reject all · {counts.pending}
+          </Button>
+        )}
         {safeCount > 0 && (
           <Button
             variant="ghost"

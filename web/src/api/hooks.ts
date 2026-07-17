@@ -908,6 +908,26 @@ export function useUndoFinding() {
   });
 }
 
+/** Reject every pending finding of the dataset (captions untouched). */
+export function useRejectAll() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { dataset_id: number }) =>
+      api.post<{ rejected: number }>("/review/findings/reject_all", vars),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+/** Delete the decided findings (the history); pending ones stay. */
+export function useClearReviewHistory() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { dataset_id: number }) =>
+      api.post<{ cleared: number }>("/review/findings/clear_history", vars),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
 /** Accept every safe finding, or every pending finding of one rule. */
 export function useDecideBulk() {
   const invalidate = useReviewInvalidator();

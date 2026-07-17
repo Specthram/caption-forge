@@ -163,6 +163,25 @@ class TestDetRun:
         )
         assert caption == "a crimson ball on the lawn."
 
+    def test_reject_all_then_clear_history(self, dataset):
+        """Reject-all rejects every pending row; clear drops the decided."""
+        _run_det(dataset["dataset_id"])
+        assert storage.reject_all_findings(dataset["dataset_id"]) == 1
+        counts = store.findings_counts(dataset["dataset_id"])
+        assert counts["pending"] == 0
+        assert counts["rejected"] == 1
+        # The caption was never touched by the rejection.
+        caption = storage.read_caption(
+            dataset["dataset_id"], dataset["key"], "txt"
+        )
+        assert caption == "a red ball on the grass."
+        assert storage.clear_review_history(dataset["dataset_id"]) == 1
+        assert store.findings_counts(dataset["dataset_id"]) == {
+            "pending": 0,
+            "accepted": 0,
+            "rejected": 0,
+        }
+
     def test_undo_restores_caption(self, dataset):
         """Undo restores the original caption and reopens the finding."""
         _run_det(dataset["dataset_id"])
