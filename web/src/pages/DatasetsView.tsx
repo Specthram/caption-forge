@@ -111,9 +111,13 @@ export function DatasetsView() {
   const datasets = useDatasets();
   const createDataset = useCreateDataset();
   const deleteDataset = useDeleteDataset();
+  const updateDataset = useUpdateDataset();
   const removeMedia = useRemoveDatasetMedia();
 
   const [newName, setNewName] = useState("");
+  // Inline rename of the active dataset (the ✎ next to the title).
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [autoOpen, setAutoOpen] = useState(false);
   // Once opened, the Studio stays mounted (hidden when closed) so an
@@ -324,9 +328,61 @@ export function DatasetsView() {
               }}
             >
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600 }}>
-                  {active.name}
-                </div>
+                {renaming ? (
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(event) => setNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        const name = nameDraft.trim();
+                        if (name && name !== active.name) {
+                          updateDataset.mutate({ id: active.id, name });
+                        }
+                        setRenaming(false);
+                      } else if (event.key === "Escape") {
+                        setRenaming(false);
+                      }
+                    }}
+                    onBlur={() => setRenaming(false)}
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 600,
+                      padding: "2px 6px",
+                      borderRadius: 6,
+                      border: `1px solid ${colors.borderControl}`,
+                      background: colors.input,
+                      color: colors.text,
+                      width: 260,
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                    }}
+                  >
+                    {active.name}
+                    <span
+                      title="Rename dataset"
+                      onClick={() => {
+                        setNameDraft(active.name);
+                        setRenaming(true);
+                      }}
+                      style={{
+                        fontSize: 12,
+                        color: colors.textMuted,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✎
+                    </span>
+                  </div>
+                )}
                 <div
                   style={{
                     fontSize: 11,
