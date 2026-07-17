@@ -61,6 +61,7 @@ import type {
   ReviewFindingsResponse,
   ReviewRule,
   CleanupCategory,
+  CleanupCount,
   CleanupReport,
   CleanupResult,
   SystemDatabase,
@@ -234,6 +235,18 @@ export function useCleanupReport() {
   return useQuery({
     queryKey: ["system-cleanup"],
     queryFn: () => api.get<CleanupReport>("/system/cleanup"),
+  });
+}
+
+/**
+ * One cleanup category's live ``{count, bytes}``. Each System-view row
+ * fetches its own report so a slow scan (patch orphans, big cache trees)
+ * shows its own loader instead of stalling the whole block.
+ */
+export function useCleanupCategory(category: CleanupCategory) {
+  return useQuery({
+    queryKey: ["system-cleanup", category],
+    queryFn: () => api.get<CleanupCount>(`/system/cleanup/${category}`),
   });
 }
 

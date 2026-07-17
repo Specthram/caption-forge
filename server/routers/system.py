@@ -189,6 +189,15 @@ def cleanup() -> dict:
     return maintenance.cleanup_report()
 
 
+@router.get("/cleanup/{category}")
+def cleanup_category(category: str) -> dict:
+    """Return one category's ``{count, bytes}`` (per-row lazy loader)."""
+    try:
+        return maintenance.category_report(category)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/cleanup/{category}")
 def cleanup_purge(category: str) -> dict:
     """Purge one cleanup category; return what was removed and reclaimed."""

@@ -96,7 +96,8 @@ def test_prune_unused_revisions_keeps_head_and_pinned(store_db):
 
     result = maintenance.run_cleanup("captions")
 
-    assert result == {"purged": 1, "bytes": 0, "vacuumed": True}
+    # rev2 ("v2") is the only prunable revision — 2 bytes of text.
+    assert result == {"purged": 1, "bytes": 2, "vacuumed": True}
     assert store.get_revision(rev2) is None
     assert store.get_revision(rev1) is not None
     assert store.head_revision_id(caption_id) == rev3
@@ -157,3 +158,109 @@ def test_run_cleanup_rejects_unknown_category(store_db):
     """An unknown category is a hard error, not a silent no-op."""
     with pytest.raises(ValueError):
         maintenance.run_cleanup("bogus")
+
+
+# -- captions of media in no dataset ------------------------------------------
+
+
+def test_unlinked_captions_purged_only_outside_datasets(store_db):
+    """Only caption histories of media in no dataset are deleted."""
+    inside = store.get_or_create_media("sha_in", "png")
+    dataset_id, caption_id, _revs = _build_caption_history(inside)
+
+    outside = store.get_or_create_media("sha_out", "png")
+    caption_type = store.get_or_create_caption_type("caption")
+    store.save_caption(dataset_id, outside, caption_type, "abcd")
+    store.remove_media_from_dataset(dataset_id, outside)
+
+    report = maintenance.unlinked_caption_report()
+    assert report == {"count": 1, "bytes": 4}
+
+    result = maintenance.run_cleanup("dataset_captions")
+    assert result == {"purged": 1, "bytes": 4, "vacuumed": True}
+    assert store.get_caption(outside, caption_type) is None
+    assert store.get_caption(inside, caption_type)["id"] == caption_id
+
+
+# -- claims (grounding) history -----------------------------------------------
+
+
+def test_claims_history_report_and_purge(store_db):
+    """The grounding history reports its claims and clears completely."""
+    media_id = store.get_or_create_media("sha", "png")
+    _dataset_id, _caption_id, revs = _build_caption_history(media_id)
+    store.upsert_caption_grounding(
+        revs[-1],
+        "siglip-test",
+        [
+            {"text": "a red ball", "kind": "object", "score": 88.0},
+            {"text": "on grass", "kind": "setting", "score": 61.0},
+        ],
+    )
+
+    report = maintenance.claims_report()
+    assert report["count"] == 2
+    assert report["bytes"] == len("a red ball") + len("on grass")
+
+    result = maintenance.run_cleanup("claims")
+    assert result["purged"] == 2
+    assert result["vacuumed"] is True
+    assert maintenance.claims_report() == {"count": 0, "bytes": 0}
+
+
+# -- index data (quality / embeddings / dims+hashes) --------------------------
+
+
+def test_quality_and_embeddings_and_index_purges(store_db):
+    """Each index sweep clears its rows and reports the reclaimed weight."""
+    media_id = store.get_or_create_media("sha", "png")
+    store.upsert_media_quality(media_id, "clipiqa", 71.0)
+    store.upsert_media_embedding(media_id, "dinov2", b"\x00" * 128)
+    store.set_media_index(media_id, 64, 48, "f" * 16, "0" * 16)
+
+    assert maintenance.quality_report()["count"] == 1
+    embeddings = maintenance.embeddings_report()
+    assert embeddings == {"count": 1, "bytes": 128}
+    assert maintenance.media_index_report()["count"] == 1
+
+    assert maintenance.run_cleanup("quality")["purged"] == 1
+    assert maintenance.run_cleanup("embeddings")["purged"] == 1
+    assert maintenance.run_cleanup("index")["purged"] == 1
+    assert maintenance.quality_report()["count"] == 0
+    assert maintenance.embeddings_report()["count"] == 0
+    assert maintenance.media_index_report()["count"] == 0
+    media = store.get_media(media_id)
+    assert media["width"] is None
+    assert media["phash"] is None
+
+
+# -- crop cache / watermark backups -------------------------------------------
+
+
+def test_crops_and_wm_backup_sweeps(store_db, monkeypatch, tmp_path):
+    """The crop cache and the watermark backups empty their trees."""
+    from src import crops as crops_mod
+    from src import maintenance as maint
+
+    crops_dir = tmp_path / "crops"
+    (crops_dir / "ab").mkdir(parents=True)
+    (crops_dir / "ab" / "abcd.png").write_bytes(b"x" * 7)
+    monkeypatch.setattr(crops_mod, "get_crops_dir", lambda: crops_dir)
+
+    backups_dir = tmp_path / "wm_backups"
+    (backups_dir / "3").mkdir(parents=True)
+    (backups_dir / "3" / "orig.png").write_bytes(b"y" * 9)
+    monkeypatch.setattr(maint, "WATERMARK_BACKUPS_DIR", backups_dir)
+
+    assert maintenance.crops_cache_report() == {"count": 1, "bytes": 7}
+    assert maintenance.wm_backup_report() == {"count": 1, "bytes": 9}
+    assert maintenance.run_cleanup("crops")["purged"] == 1
+    assert maintenance.run_cleanup("wm_backups")["purged"] == 1
+    assert maintenance.crops_cache_report()["count"] == 0
+    assert maintenance.wm_backup_report()["count"] == 0
+
+
+def test_category_report_rejects_unknown(store_db):
+    """The per-row report endpoint helper rejects unknown categories."""
+    with pytest.raises(ValueError):
+        maintenance.category_report("bogus")

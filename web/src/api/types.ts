@@ -647,7 +647,14 @@ export interface CleanupCount {
 export interface CleanupReport {
   media: CleanupCount;
   captions: CleanupCount;
+  dataset_captions: CleanupCount;
+  claims: CleanupCount;
+  quality: CleanupCount;
+  embeddings: CleanupCount;
+  index: CleanupCount;
+  crops: CleanupCount;
   patches: CleanupCount;
+  wm_backups: CleanupCount;
   thumbs: CleanupCount;
 }
 

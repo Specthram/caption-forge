@@ -101,7 +101,10 @@ from src.sqlite_store.captions import (
     unused_caption_count,
     delete_unused_captions,
     unused_revision_count,
+    unused_revision_bytes,
     prune_unused_revisions,
+    unlinked_caption_report,
+    purge_unlinked_captions,
 )
 
 from src.sqlite_store.media import (
@@ -326,6 +329,17 @@ from src.sqlite_store.grounding import (
     tag_grounding_for_media,
     tag_groundings_bulk,
     delete_tag_grounding,
+    grounding_history_report,
+    purge_grounding_history,
+)
+
+from src.sqlite_store.sweeps import (
+    quality_scores_report,
+    purge_quality_scores,
+    embeddings_report,
+    purge_embeddings,
+    media_index_report,
+    purge_media_index,
 )
 
 __all__ = [
@@ -531,6 +545,17 @@ __all__ = [
     "prune_sub_libraries",
     "prune_uncategorized_if_empty",
     "prune_unused_revisions",
+    "unused_revision_bytes",
+    "unlinked_caption_report",
+    "purge_unlinked_captions",
+    "grounding_history_report",
+    "purge_grounding_history",
+    "quality_scores_report",
+    "purge_quality_scores",
+    "embeddings_report",
+    "purge_embeddings",
+    "media_index_report",
+    "purge_media_index",
     "purge_media",
     "read_caption",
     "reconcile_resolutions",
