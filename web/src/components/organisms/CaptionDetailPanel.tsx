@@ -50,6 +50,7 @@ export function CaptionDetailPanel() {
   const removeTag = useRemoveTag();
   const integrity = useIntegrityReview();
   const runReview = useRunReview();
+  const profiles = useProfiles();
   const setCaptionTab = useUiStore((state) => state.setCaptionTab);
   const setPendingReviewJob = useUiStore((state) => state.setPendingReviewJob);
   const openCaptionEditor = useUiStore((state) => state.openCaptionEditor);
@@ -177,8 +178,7 @@ export function CaptionDetailPanel() {
                   dataset_id: datasetId,
                   caption_type: captionType,
                   media_ids: [Number(data.key)],
-                  // null = judge with whatever model is already loaded.
-                  judge_profile_id: null,
+                  judge_profile_id: profiles.data?.judge_id ?? null,
                   scope: "single",
                 },
                 { onSuccess: (res) => setPendingReviewJob(res.job_id) },

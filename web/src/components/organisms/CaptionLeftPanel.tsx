@@ -402,54 +402,6 @@ export function CaptionLeftPanel() {
         )}
       </Section>
       </div>
-
-      <div
-        style={{
-          flex: "none",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "10px 14px",
-          borderTop: `1px solid ${colors.border}`,
-          background: colors.panel,
-        }}
-        title={loaded ? (loadedProfile?.file ?? status.data?.name ?? "") : ""}
-      >
-        <span style={{ color: loaded ? colors.ok : colors.textFaint }}>
-          {loaded ? "●" : "○"}
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              color: loaded ? colors.text : colors.textMuted,
-            }}
-          >
-            {loaded
-              ? (loadedProfile?.name ?? status.data?.name ?? "Model loaded")
-              : "No model loaded"}
-          </div>
-          <div
-            style={{
-              fontFamily: font.mono,
-              fontSize: 9.5,
-              color: colors.textFaint,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {loaded
-              ? `${loadedProfile?.file ?? ""} · loaded`
-              : "unloaded — memory purged"}
-          </div>
-        </div>
-        {modelBusy && <Spinner size={11} />}
-      </div>
     </div>
   );
 }
