@@ -35,6 +35,13 @@ def generate_body(params):
             ]
         excluded = set(params.exclude_ids or [])
         keys = [key for key in keys if int(key) not in excluded]
+        if not params.recaption:
+            # Only fill the blanks: drop media whose caption already has
+            # content (one bulk query, not one read per media).
+            texts = storage.read_captions_bulk(
+                dataset_ref, [str(key) for key in keys], caption_type
+            )
+            keys = [key for key in keys if not texts.get(str(key), "").strip()]
         total = len(keys)
         progress(total=total, done=0, sub=f"0 / {total}")
         seed = _resolve_seed(params.seed)

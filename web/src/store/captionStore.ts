@@ -18,6 +18,8 @@ interface CaptionState {
   reviewAfter: boolean;
   /** Judge model for the review-after pass ("" = reuse the captioner). */
   reviewJudge: string;
+  /** Off = only caption media whose caption is still empty. */
+  recaption: boolean;
   /** Chain a SigLIP grounding pass on every freshly written caption. */
   groundAfter: boolean;
   locked: Set<string>;
@@ -36,6 +38,7 @@ export const useCaptionStore = create<CaptionState>((set) => ({
   imgRes: 1024,
   reviewAfter: false,
   reviewJudge: "",
+  recaption: true,
   groundAfter: false,
   locked: new Set(),
 

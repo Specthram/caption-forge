@@ -207,6 +207,14 @@ export function DatasetComposerModal({
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
 
+  // Every id passing the current filters (all pages), from the same payload
+  // the grid pages through — "Select all" picks the whole filtered set.
+  const filteredIds = useMemo(() => data?.ids ?? [], [data]);
+  const allPicked =
+    filteredIds.length > 0 && filteredIds.every((id) => picked.includes(id));
+  const selectAllFiltered = () =>
+    setPicked((prev) => [...new Set([...prev, ...filteredIds])]);
+
   const confirm = () => {
     if (picked.length === 0) return;
     add.mutate({ id: datasetId, media_ids: picked }, { onSuccess: onClose });
@@ -385,6 +393,27 @@ export function DatasetComposerModal({
               </span>
               <Seg value={sort} onChange={setSort} options={SORTS} />
               <div style={{ flex: 1 }} />
+              <button
+                onClick={selectAllFiltered}
+                disabled={filteredIds.length === 0 || allPicked}
+                title="Select every candidate passing the current filters (all pages)"
+                style={{
+                  ...pagerButton,
+                  fontSize: 11,
+                  color:
+                    filteredIds.length === 0 || allPicked
+                      ? colors.textFaint
+                      : colors.textSecondary,
+                  cursor:
+                    filteredIds.length === 0 || allPicked
+                      ? "default"
+                      : "pointer",
+                }}
+              >
+                {allPicked
+                  ? "✓ All selected"
+                  : `☑ Select all (${filteredIds.length})`}
+              </button>
               <span style={counter}>
                 {total} / {data?.pool ?? 0} candidates
               </span>

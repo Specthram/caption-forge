@@ -129,6 +129,40 @@ class TestDetRun:
         assert caption.startswith("ryn, ")
         assert store.get_finding(finding["id"])["status"] == "accepted"
 
+    def test_second_accept_merges_with_the_first(self, dataset):
+        """Accepting two findings keeps both fixes (diff-merge on accept)."""
+        base = "a red ball on the grass."
+        run_id = storage.open_review_run(dataset["dataset_id"], "", "all", 1)
+        media_id = int(dataset["key"])
+        first = storage.record_review_finding(
+            run_id,
+            media_id,
+            "txt",
+            "color",
+            base,
+            "a crimson ball on the grass.",
+        )
+        second = storage.record_review_finding(
+            run_id,
+            media_id,
+            "txt",
+            "ground",
+            base,
+            "a red ball on the lawn.",
+        )
+        storage.close_review_run(run_id, 2)
+        storage.decide_review_finding(first, "accept")
+        # The sibling is rebased: its "original" now shows the first accept
+        # applied, and its proposal is the same fix on top of it.
+        sibling = store.get_finding(second)
+        assert sibling["caption_before"] == "a crimson ball on the grass."
+        assert sibling["caption_after"] == "a crimson ball on the lawn."
+        storage.decide_review_finding(second, "accept")
+        caption = storage.read_caption(
+            dataset["dataset_id"], dataset["key"], "txt"
+        )
+        assert caption == "a crimson ball on the lawn."
+
     def test_undo_restores_caption(self, dataset):
         """Undo restores the original caption and reopens the finding."""
         _run_det(dataset["dataset_id"])

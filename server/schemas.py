@@ -84,6 +84,9 @@ class GenerateBody(BaseModel):
     review_after: bool = False
     review_judge_model: str = ""  # judge for review_after ("" = the captioner)
     ground_after: bool = False
+    # Off = caption only media whose caption is still empty; on (default)
+    # regenerates every targeted media, already-captioned ones included.
+    recaption: bool = True
 
 
 class DeployBody(BaseModel):

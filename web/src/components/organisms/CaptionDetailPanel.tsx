@@ -525,6 +525,8 @@ function RegenerateButton({
         image_size: gen.imgRes,
         review_after: gen.reviewAfter,
         ground_after: gen.groundAfter,
+        // An explicit per-media regenerate always rewrites, filled or not.
+        recaption: true,
       },
       { onSuccess: (data) => job.start(data.job_id) },
     );

@@ -321,6 +321,8 @@ export function QualityReportTab({ datasetId }: { datasetId: number }) {
         image_size: RECAPTION_IMAGE_SIZE,
         review_after: false,
         ground_after: false,
+        // An explicit per-media re-caption always rewrites, filled or not.
+        recaption: true,
       },
       { onSuccess: () => resolve(issue, "recaptioned") },
     );

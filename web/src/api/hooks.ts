@@ -666,6 +666,8 @@ export interface GenerateVars {
   review_after: boolean;
   review_judge_model?: string;
   ground_after: boolean;
+  /** Off = only caption media whose caption is still empty. */
+  recaption: boolean;
 }
 
 export function useGenerate() {

@@ -127,6 +127,7 @@ export function CaptionLeftPanel() {
         review_after: gen.reviewAfter,
         review_judge_model: gen.reviewJudge,
         ground_after: gen.groundAfter,
+        recaption: gen.recaption,
       },
       {
         onSuccess: (data) => {
@@ -328,6 +329,26 @@ export function CaptionLeftPanel() {
           >
             ✦ Generate all captions
           </Button>
+        )}
+        <label style={checkboxRow}>
+          <input
+            type="checkbox"
+            checked={gen.recaption}
+            onChange={(event) => gen.set({ recaption: event.target.checked })}
+          />
+          Re-caption existing captions
+        </label>
+        {!gen.recaption && (
+          <div
+            style={{
+              margin: "0 0 6px 22px",
+              fontSize: 10,
+              color: colors.textFaint,
+              lineHeight: 1.4,
+            }}
+          >
+            Only media whose caption is still empty will be captioned.
+          </div>
         )}
         <label style={checkboxRow}>
           <input

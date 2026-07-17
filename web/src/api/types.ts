@@ -334,6 +334,8 @@ export interface ComposeCandidatesPage {
   total: number;
   /** How many candidates exist before any filter. */
   pool: number;
+  /** Every filtered candidate id (not just the page) — "Select all". */
+  ids: number[];
   items: ComposeCandidate[];
   /** Map point of every filtered candidate, not just the page. */
   pool_points: [number, number][];

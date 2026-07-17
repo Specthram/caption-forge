@@ -8,7 +8,8 @@ media's database id as a string). It also owns the virtual "tags" caption
 type, which is threaded through every caption operation below.
 """
 
-from src import caption_claims, caption_review, caption_score, siglip_grounding
+from src import caption_claims, caption_judge, caption_review, caption_score
+from src import siglip_grounding
 from src import sqlite_store as store
 from src.media import is_video_file
 from src.settings import (
@@ -953,16 +954,43 @@ def record_review_finding(
 
 
 def _apply_accept(finding: dict, caption: str = None) -> None:
-    """Write the accepted caption as a new revision for a finding's media."""
+    """Write the accepted caption as a new revision for a finding's media.
+
+    The finding's fix is merged into the *live* caption
+    (:func:`src.caption_judge.apply_fix`), never written verbatim: accepting
+    a second finding must not resurrect the run-time caption and erase the
+    first accept (or a manual edit made since the run). An explicit
+    ``caption`` (inline edit before accept) still wins as-is.
+    """
     type_row = store.get_caption_type(finding["caption_type_id"])
     caption_type = type_row["name"] if type_row else ""
-    final = caption if caption is not None else finding["caption_after"]
+    if caption is not None:
+        final = caption
+    else:
+        current = read_caption(
+            finding["dataset_id"], str(finding["media_id"]), caption_type
+        )
+        final = caption_judge.apply_fix(
+            finding["caption_before"], current, finding["caption_after"]
+        )
     write_caption(
         finding["dataset_id"], str(finding["media_id"]), caption_type, final
     )
     store.decide_finding(
         finding["id"], store.STATUS_ACCEPTED, applied_caption=final
     )
+    # Rebase the media's other pending findings onto the new caption: their
+    # "original" then shows this accept applied, and their proposal is the
+    # same fix re-applied on top — the next accept diffs against reality.
+    for sibling in store.pending_for_media(
+        finding["dataset_id"],
+        finding["media_id"],
+        finding["caption_type_id"],
+    ):
+        rebased = caption_judge.apply_fix(
+            sibling["caption_before"], final, sibling["caption_after"]
+        )
+        store.rebase_finding(sibling["id"], final, rebased)
 
 
 def decide_review_finding(

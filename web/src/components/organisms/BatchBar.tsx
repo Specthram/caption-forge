@@ -47,6 +47,7 @@ export function BatchBar() {
       image_size: gen.imgRes,
       review_after: gen.reviewAfter,
       ground_after: gen.groundAfter,
+      recaption: gen.recaption,
     });
 
   const addTagToAll = async () => {

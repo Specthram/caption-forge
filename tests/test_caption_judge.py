@@ -134,3 +134,44 @@ class TestCheckDetRule:
         """An empty caption yields just the trigger word."""
         rule = {"text": 'contain "ryn".'}
         assert cj.check_det_rule(rule, "", [])["caption_after"] == "ryn"
+
+
+class TestApplyFix:
+    """Tests for :func:`cj.apply_fix` (three-way merge on accept)."""
+
+    BASE = "a red circle on a green square, watermark bottom right"
+
+    def test_unchanged_current_takes_fix_verbatim(self):
+        """When nothing moved since the run, the fix applies as-is."""
+        after = self.BASE.replace("watermark bottom right", "clean photo")
+        assert cj.apply_fix(self.BASE, self.BASE, after) == after
+
+    def test_second_accept_keeps_the_first(self):
+        """Accepting fix B after fix A keeps both changes (the bug)."""
+        fix_a = self.BASE.replace("red circle", "crimson circle")
+        fix_b = self.BASE.replace("watermark bottom right", "no watermark")
+        merged = cj.apply_fix(self.BASE, fix_a, fix_b)
+        assert "crimson circle" in merged
+        assert "no watermark" in merged
+        assert "watermark bottom right" not in merged
+
+    def test_manual_edit_survives_an_accept(self):
+        """A user edit elsewhere in the caption survives the merge."""
+        edited = "MYTRIGGER " + self.BASE
+        fix = self.BASE.replace("green square", "blue square")
+        merged = cj.apply_fix(self.BASE, edited, fix)
+        assert merged.startswith("MYTRIGGER ")
+        assert "blue square" in merged
+
+    def test_conflict_prefers_the_accepted_fix(self):
+        """Both sides rewrote the same words: the just-accepted fix wins."""
+        edited = self.BASE.replace("red circle", "pink disc")
+        fix = self.BASE.replace("red circle", "crimson circle")
+        merged = cj.apply_fix(self.BASE, edited, fix)
+        assert "crimson circle" in merged
+        assert "pink disc" not in merged
+
+    def test_current_already_equal_to_fix_is_stable(self):
+        """Re-accepting an already applied fix changes nothing."""
+        fix = self.BASE.replace("red", "crimson")
+        assert cj.apply_fix(self.BASE, fix, fix) == fix

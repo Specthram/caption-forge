@@ -101,6 +101,95 @@ def rewrite_ratio(before: str, after: str) -> float:
     ).ratio()
 
 
+# Word/whitespace tokens: "".join(_tokens(s)) round-trips s exactly, so a
+# merge never mangles spacing or punctuation.
+_TOKEN = re.compile(r"\S+|\s+")
+
+
+def _tokens(text: str) -> list:
+    """Split ``text`` into word and whitespace tokens (lossless)."""
+    return _TOKEN.findall(text or "")
+
+
+def _edits(base_tokens: list, side_tokens: list) -> list:
+    """Return one side's edits against the base.
+
+    Each edit is ``(start, end, replacement_tokens)`` in base coordinates
+    (``start == end`` for a pure insertion); spans are sorted and disjoint.
+    """
+    matcher = SequenceMatcher(None, base_tokens, side_tokens)
+    return [
+        (i1, i2, side_tokens[j1:j2])
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    ]
+
+
+def apply_fix(base: str, current: str, incoming: str) -> str:
+    """Apply the ``base → incoming`` correction on top of ``current``.
+
+    Three-way word merge, so accepting one finding after another keeps the
+    earlier accept instead of resurrecting the run-time caption: regions the
+    fix rewrites take the fix's words, regions only ``current`` changed keep
+    the current words, and when both touched the same region the fix — the
+    one the user just accepted — wins.
+    """
+    if base == incoming:  # no-op fix — never clobber the live caption
+        return current
+    if current in (base, incoming):
+        return incoming
+    tokens = _tokens(base)
+    ours = _edits(tokens, _tokens(current))
+    theirs = _edits(tokens, _tokens(incoming))
+
+    merged = []
+    cursor = 0  # position in base tokens
+    oi = ti = 0
+    while oi < len(ours) or ti < len(theirs):
+        # Open the next cluster at the earliest remaining edit, then absorb
+        # every span (either side) that overlaps or touches it.
+        start = min(
+            edits[index][0]
+            for edits, index in ((ours, oi), (theirs, ti))
+            if index < len(edits)
+        )
+        end = start
+        cluster_ours, cluster_theirs = [], []
+
+        def touches(span_start, cluster_end):
+            """Overlap, or separated from the cluster by whitespace only."""
+            return span_start <= cluster_end or all(
+                token.isspace() for token in tokens[cluster_end:span_start]
+            )
+
+        grew = True
+        while grew:
+            grew = False
+            while oi < len(ours) and touches(ours[oi][0], end):
+                cluster_ours.append(ours[oi])
+                end = max(end, ours[oi][1])
+                oi += 1
+                grew = True
+            while ti < len(theirs) and touches(theirs[ti][0], end):
+                cluster_theirs.append(theirs[ti])
+                end = max(end, theirs[ti][1])
+                ti += 1
+                grew = True
+        merged.extend(tokens[cursor:start])
+        # Conflicting cluster → the incoming fix wins; otherwise replay the
+        # only side that touched it.
+        winner = cluster_theirs if cluster_theirs else cluster_ours
+        position = start
+        for span_start, span_end, replacement in winner:
+            merged.extend(tokens[position:span_start])
+            merged.extend(replacement)
+            position = span_end
+        merged.extend(tokens[position:end])
+        cursor = end
+    merged.extend(tokens[cursor:])
+    return "".join(merged)
+
+
 def judged_finding(before: str, verdict: dict | None) -> dict | None:
     """Return a finding for a judge verdict, or None when there is nothing.
 

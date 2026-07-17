@@ -272,6 +272,32 @@ def pending_for_rule(dataset_id: int, rule_id: int) -> list:
     return [dict(row) for row in rows]
 
 
+def pending_for_media(
+    dataset_id: int, media_id: int, caption_type_id: int
+) -> list:
+    """Return one media's pending findings for a caption type."""
+    rows = _query_all(
+        f"{_FINDING_SELECT} WHERE run.dataset_id = ? AND f.media_id = ? "
+        "AND f.caption_type_id = ? AND f.status = ? ORDER BY f.id DESC",
+        (dataset_id, media_id, caption_type_id, STATUS_PENDING),
+    )
+    return [dict(row) for row in rows]
+
+
+def rebase_finding(finding_id: int, before: str, after: str) -> None:
+    """Rewrite a pending finding's before/after pair.
+
+    Used when a sibling accept rewrote the live caption: the finding's
+    "original" must show the caption as it now is, and its proposal the
+    same fix re-applied on top (see ``storage._apply_accept``).
+    """
+    _write(
+        "UPDATE review_finding SET caption_before = ?, caption_after = ? "
+        "WHERE id = ?",
+        (before, after, finding_id),
+    )
+
+
 def decide_finding(
     finding_id: int, status: str, applied_caption: str = None
 ) -> None:
