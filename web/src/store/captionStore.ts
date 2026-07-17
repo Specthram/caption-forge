@@ -9,15 +9,14 @@
 import { create } from "zustand";
 
 interface CaptionState {
-  model: string;
+  /**
+   * Prompt text and seed are the only generation params kept here: the
+   * rest (temperature, thinking, image res, max tokens) live on the model
+   * profile (see /api/profiles). Seed "-1" = random each run.
+   */
   prompt: string;
-  temperature: number;
   seed: string;
-  think: string;
-  imgRes: number;
   reviewAfter: boolean;
-  /** Judge model for the review-after pass ("" = reuse the captioner). */
-  reviewJudge: string;
   /** Off = only caption media whose caption is still empty. */
   recaption: boolean;
   /** Chain a SigLIP grounding pass on every freshly written caption. */
@@ -30,14 +29,9 @@ interface CaptionState {
 }
 
 export const useCaptionStore = create<CaptionState>((set) => ({
-  model: "",
   prompt: "",
-  temperature: 0.7,
   seed: "-1",
-  think: "auto",
-  imgRes: 1024,
   reviewAfter: false,
-  reviewJudge: "",
   recaption: true,
   groundAfter: false,
   locked: new Set(),

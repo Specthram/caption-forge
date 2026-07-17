@@ -100,6 +100,26 @@ def load_review_prompts() -> dict:
     return deep_merge(default, user)
 
 
+# --- Model profiles ---
+
+_PROFILES_FILENAME = "model_profiles.json"
+
+
+def load_model_profiles() -> dict:
+    """Return the raw model-profiles store (user layer only).
+
+    Profiles are runtime user data (weights paths are machine-specific), so
+    there is no default layer: the file lives in ``config/user/`` alone.
+    Empty when never saved.
+    """
+    return _read_json(USER_CONFIG_DIR / _PROFILES_FILENAME)
+
+
+def save_model_profiles(data: dict) -> None:
+    """Persist the model-profiles store to ``config/user/``."""
+    _write_json(USER_CONFIG_DIR / _PROFILES_FILENAME, data)
+
+
 # --- Dataset auto-build configuration ---
 
 

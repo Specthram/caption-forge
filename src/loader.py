@@ -271,8 +271,17 @@ def _load_local(local_path: Path, hf_config_id: str, model_type: str):
 # --- GGUF (llama-cpp) ---
 
 
-def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
-    """Load a local GGUF vision model (weights + mmproj) via llama-cpp."""
+def _load_gguf_vision(
+    local_path: Path,
+    mmproj_path: Path,
+    model_type: str,
+    n_ctx: int | None = None,
+):
+    """Load a local GGUF vision model (weights + mmproj) via llama-cpp.
+
+    ``n_ctx`` overrides the global context-size setting (model profiles);
+    ``None`` keeps the Settings value.
+    """
     global model, processor, current_model_type, current_format
 
     if not LLAMA_CPP_AVAILABLE:
@@ -315,7 +324,7 @@ def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
         model = Llama(
             model_path=str(local_path),
             chat_handler=chat_handler,
-            n_ctx=get_gguf_n_ctx(),
+            n_ctx=n_ctx if n_ctx is not None else get_gguf_n_ctx(),
             n_gpu_layers=-1 if device == "cuda" else 0,
             n_batch=512,
             verbose=False,
@@ -333,8 +342,16 @@ def _load_gguf_vision(local_path: Path, mmproj_path: Path, model_type: str):
     current_format = "gguf-vision"
 
 
-def _load_gguf_text(weights_path: str, processor_repo: str, model_type: str):
-    """Load a local text-only GGUF model via llama-cpp."""
+def _load_gguf_text(
+    weights_path: str,
+    processor_repo: str,
+    model_type: str,
+    n_ctx: int | None = None,
+):
+    """Load a local text-only GGUF model via llama-cpp.
+
+    ``n_ctx`` overrides the global context-size setting (model profiles).
+    """
     global model, processor, current_model_type, current_format
 
     if not LLAMA_CPP_AVAILABLE:
@@ -347,7 +364,7 @@ def _load_gguf_text(weights_path: str, processor_repo: str, model_type: str):
 
     model = Llama(
         model_path=weights_path,
-        n_ctx=get_gguf_n_ctx(),
+        n_ctx=n_ctx if n_ctx is not None else get_gguf_n_ctx(),
         n_gpu_layers=-1 if device == "cuda" else 0,
         n_batch=512,
         verbose=False,
@@ -370,9 +387,11 @@ def _load_local_processor(hf_config_id: str):
     """Load a processor from local HF config files only, or None.
 
     Used by the text-only GGUF path for its chat template. Never reaches the
-    network: when the config is absent locally, returns None.
+    network: when the config is absent locally, returns None. A profile with
+    no known HF repo (text-only fallback) passes None and gets the built-in
+    template.
     """
-    if hf_assets.missing_hf_files(hf_config_id):
+    if not hf_config_id or hf_assets.missing_hf_files(hf_config_id):
         return None
     config_src = str(hf_assets.hf_config_dir(hf_config_id))
     try:
@@ -460,6 +479,7 @@ def _load_model(model_cfg: dict):
                     Path(model_cfg["local_path"]),
                     Path(model_cfg["mmproj_path"]),
                     model_type,
+                    n_ctx=model_cfg.get("n_ctx"),
                 )
                 loaded_name = name
                 yield (
@@ -472,6 +492,7 @@ def _load_model(model_cfg: dict):
                     str(model_cfg["local_path"]),
                     model_cfg["hf_config"],
                     model_type,
+                    n_ctx=model_cfg.get("n_ctx"),
                 )
                 loaded_name = name
                 yield (

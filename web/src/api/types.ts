@@ -17,6 +17,51 @@ export interface ModelInfo {
   has_mmproj: boolean;
 }
 
+/** One model profile: weights + everything needed to load and run them. */
+export interface ModelProfile {
+  id: number;
+  name: string;
+  file: string;
+  dir: string;
+  format: "gguf" | "safetensors";
+  /** Family key ("" = unrecognized safetensors). */
+  type: string;
+  type_mode: "auto" | "manual";
+  temp: number;
+  n_ctx: number;
+  mmproj_mode: "auto" | "manual";
+  mmproj: string | null;
+  think: string;
+  max_tok: number;
+  img_res: number;
+  /** Default prompt preset title (within the profile's type). */
+  prompt: string;
+}
+
+export interface ProfileFamily {
+  key: string;
+  label: string;
+  think: boolean;
+  /** Offered in the editor's manual type list. */
+  manual: boolean;
+}
+
+export interface ProfilesResponse {
+  profiles: ModelProfile[];
+  active_id: number;
+  judge_id: number;
+  loaded_id: number | null;
+  families: ProfileFamily[];
+}
+
+/** Type/mmproj auto-detection result for a picked weights file. */
+export interface ProfileDetect {
+  type: string;
+  format: string | null;
+  mmproj: string | null;
+  name: string;
+}
+
 /** Live memory of the primary CUDA GPU (all figures in GB). */
 export interface GpuInfo {
   name: string;
@@ -174,7 +219,7 @@ export interface FileListing {
   path: string;
   parent: string | null;
   is_root: boolean;
-  entries: { name: string; path: string; kind: "dir" | "file" }[];
+  entries: { name: string; path: string; kind: "dir" | "file"; size?: number }[];
 }
 
 export interface MediaMeta {

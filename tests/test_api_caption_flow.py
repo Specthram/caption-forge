@@ -433,7 +433,9 @@ def test_generate_skips_filled_captions_when_recaption_off(
     storage.write_caption(dataset_id, filled, "txt", "already there")
 
     monkeypatch.setattr(
-        generate_runner, "_caption_one", lambda path, params, seed: "fresh"
+        generate_runner,
+        "_caption_one",
+        lambda path, params, seed, profile: "fresh",
     )
     params = GenerateBody(
         dataset_id=dataset_id,

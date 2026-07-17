@@ -125,6 +125,26 @@ export function groundingColor(
   return colors.danger;
 }
 
+/** Type badge colour of a model-profile family (see src/model_profiles.py). */
+export function profileTypeColor(key: string): string {
+  switch (key) {
+    case "qwen3":
+    case "qwen3.6":
+      return colors.info;
+    case "gemma3":
+    case "gemma3n":
+      return colors.greenAlt;
+    case "gemma4":
+      return colors.composition;
+    case "mistral3":
+      return colors.warn;
+    case "llava":
+      return colors.fav;
+    default:
+      return colors.catGeneral;
+  }
+}
+
 /** Dot colour of an Index-pipeline step (src/index_steps.py keys). */
 export function stepColor(key: string): string {
   switch (key) {

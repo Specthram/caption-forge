@@ -1,7 +1,9 @@
 /**
- * Caption tab left panel: model load, prompt preset (save/delete), the
- * generation params (shared through the caption store so the batch bar
- * reuses them), Generate-all (streamed job, skips locked media) and deploy.
+ * Caption tab left panel: the captioner model profile (selector +
+ * Load/Unload + status), the prompt preset (filtered by the profile's
+ * family) with the seed dice, Generate-all (streamed job, skips locked
+ * media) and deploy. Generation params (temperature, thinking, image res,
+ * max tokens, n_ctx) all live on the profile — edited in its modal.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -10,9 +12,9 @@ import {
   useDeploy,
   useGenerate,
   useGroundingEnabled,
-  useLoadModel,
+  useLoadProfile,
   useModelStatus,
-  useModels,
+  useProfiles,
   usePrompts,
   useSavePrompt,
   useUndeploy,
@@ -23,7 +25,8 @@ import { useUiStore } from "../../store/uiStore";
 import { useCaptionStore } from "../../store/captionStore";
 import { useJobList, useJobsStore } from "../../store/jobsStore";
 import { api } from "../../api/client";
-import { Button, Label, Segmented, Slider, Spinner } from "../atoms";
+import { Button, Label, Spinner } from "../atoms";
+import { ProfileSelector } from "./ProfileSelector";
 
 const selectStyle = {
   width: "100%",
@@ -41,9 +44,9 @@ export function CaptionLeftPanel() {
   const setCaptionTab = useUiStore((state) => state.setCaptionTab);
   const gen = useCaptionStore();
 
-  const models = useModels();
+  const profiles = useProfiles();
   const status = useModelStatus();
-  const loadModel = useLoadModel();
+  const loadProfile = useLoadProfile();
   const unloadModel = useUnloadModel();
   const generate = useGenerate();
   const groundingEnabled = useGroundingEnabled();
@@ -53,14 +56,23 @@ export function CaptionLeftPanel() {
   const deletePrompt = useDeletePrompt();
   const jobs = useJobList();
 
-  const modelType = useMemo(() => {
-    if (status.data?.loaded) return status.data.type;
-    return models.data?.models.find((m) => m.name === gen.model)?.type ?? null;
-  }, [status.data, models.data, gen.model]);
+  const data = profiles.data;
+  const active = useMemo(
+    () => data?.profiles.find((p) => p.id === data.active_id) ?? null,
+    [data],
+  );
+  const loadedProfile = useMemo(
+    () => data?.profiles.find((p) => p.id === data.loaded_id) ?? null,
+    [data],
+  );
+  const judgeProfile = useMemo(
+    () => data?.profiles.find((p) => p.id === data.judge_id) ?? null,
+    [data],
+  );
+  const modelType = active?.type || null;
 
   const prompts = usePrompts(modelType);
   const [selectedTitle, setSelectedTitle] = useState("");
-  const [modelOpen, setModelOpen] = useState(false);
   const [reviewJobId, setReviewJobId] = useState<string | null>(null);
   const reviewJob = useJobsStore((state) =>
     reviewJobId ? state.jobs[reviewJobId] : undefined,
@@ -78,21 +90,22 @@ export function CaptionLeftPanel() {
     }
   }, [reviewJob, reviewJobId, setCaptionTab]);
 
+  // Selecting a profile (or editing its default prompt) applies that preset
+  // as the panel's current prompt; otherwise fall back to the type's
+  // remembered preset, then the first one.
   useEffect(() => {
     if (prompts.data) {
+      const list = prompts.data.prompts;
       const preset =
-        prompts.data.prompts.find((p) => p.title === prompts.data.selected) ??
-        prompts.data.prompts[0];
-      gen.set({
-        temperature: prompts.data.temperature,
-        think: prompts.data.think_mode,
-        prompt: preset?.prompt ?? "",
-      });
+        list.find((p) => p.title === active?.prompt) ??
+        list.find((p) => p.title === prompts.data.selected) ??
+        list[0];
+      gen.set({ prompt: preset?.prompt ?? "" });
       setSelectedTitle(preset?.title ?? "");
     }
-    // Only re-sync when the fetched presets change.
+    // Only re-sync when the presets or the active profile change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompts.data]);
+  }, [prompts.data, active?.id, active?.prompt]);
 
   const selectedPreset = prompts.data?.prompts.find(
     (p) => p.title === selectedTitle,
@@ -101,18 +114,19 @@ export function CaptionLeftPanel() {
     (job) => job.type === "generate" && job.state === "running",
   );
   // A load/unload is a queued job; the button reflects it as busy until the
-  // model-status poll confirms the new loaded state.
+  // profiles poll confirms the new loaded state.
   const modelJob = jobs.find(
     (job) =>
       (job.type === "load-model" || job.type === "unload-model") &&
       (job.state === "queued" || job.state === "running"),
   );
   const loaded = status.data?.loaded ?? false;
+  const activeLoaded = active != null && active.id === data?.loaded_id;
   const modelBusy =
-    !!modelJob || loadModel.isPending || unloadModel.isPending;
+    !!modelJob || loadProfile.isPending || unloadModel.isPending;
 
   const startGenerate = () => {
-    if (datasetId == null) return;
+    if (datasetId == null || !data) return;
     generate.mutate(
       {
         dataset_id: datasetId,
@@ -120,18 +134,16 @@ export function CaptionLeftPanel() {
         media_ids: null,
         exclude_ids: Array.from(gen.locked).map(Number),
         prompt: gen.prompt,
-        temperature: gen.temperature,
+        profile_id: data.active_id,
         seed: gen.seed ? Number(gen.seed) : null,
-        think_mode: gen.think,
-        image_size: gen.imgRes,
         review_after: gen.reviewAfter,
-        review_judge_model: gen.reviewJudge,
+        review_judge_profile_id: gen.reviewAfter ? data.judge_id : null,
         ground_after: gen.groundAfter,
         recaption: gen.recaption,
       },
       {
-        onSuccess: (data) => {
-          if (gen.reviewAfter) setReviewJobId(data.job_id);
+        onSuccess: (result) => {
+          if (gen.reviewAfter) setReviewJobId(result.job_id);
         },
       },
     );
@@ -150,58 +162,6 @@ export function CaptionLeftPanel() {
     }
   };
 
-  const collapsedModelLabel = modelBusy
-    ? modelJob?.sub || (loaded ? "Unloading…" : "Loading…")
-    : loaded
-      ? (status.data?.name ?? "Model loaded")
-      : "No model loaded";
-
-  const modelControls = (
-    <>
-      <select
-        style={selectStyle}
-        value={gen.model}
-        onChange={(event) => gen.set({ model: event.target.value })}
-      >
-        <option value="">Select a model…</option>
-        {models.data?.models.map((model) => (
-          <option key={model.name} value={model.name}>
-            {model.name}
-          </option>
-        ))}
-      </select>
-      <div style={{ marginTop: 10 }}>
-        <Label>Image res. · {gen.imgRes}px</Label>
-        <Slider
-          min={512}
-          max={2048}
-          step={128}
-          value={gen.imgRes}
-          onChange={(imgRes) => gen.set({ imgRes })}
-        />
-      </div>
-      <Button
-        variant={loaded ? "ghost" : "accent"}
-        block
-        style={{ marginTop: 10 }}
-        disabled={modelBusy || (!loaded && !gen.model)}
-        onClick={() =>
-          loaded ? unloadModel.mutate() : loadModel.mutate(gen.model)
-        }
-      >
-        {modelBusy
-          ? modelJob?.sub || (loaded ? "Unloading…" : "Loading…")
-          : loaded
-            ? "Unload model"
-            : "Load model"}
-      </Button>
-      <div style={{ marginTop: 10, fontSize: 11, color: colors.textMuted }}>
-        {loaded ? "● " : "○ "}
-        {status.data?.status}
-      </div>
-    </>
-  );
-
   return (
     <div
       style={{
@@ -216,6 +176,52 @@ export function CaptionLeftPanel() {
       }}
     >
       <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
+        <Section title="Model profile">
+          <ProfileSelector role="caption" />
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <Button
+              variant="accent"
+              style={{ flex: 1 }}
+              disabled={modelBusy || !active?.file || activeLoaded}
+              onClick={() => active && loadProfile.mutate(active.id)}
+            >
+              {modelBusy
+                ? modelJob?.sub || "Working…"
+                : "Load model"}
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={modelBusy || !loaded}
+              onClick={() => unloadModel.mutate()}
+            >
+              Unload
+            </Button>
+          </div>
+          <div
+            style={{
+              marginTop: 8,
+              fontFamily: font.mono,
+              fontSize: 10.5,
+              color: activeLoaded
+                ? colors.ok
+                : loaded
+                  ? colors.warn
+                  : colors.textFaint,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={status.data?.status ?? ""}
+          >
+            {activeLoaded
+              ? "● loaded"
+              : loaded
+                ? `● ${loadedProfile?.name ?? status.data?.name ?? "?"} in ` +
+                  "VRAM — swaps on load or run"
+                : "○ unloaded — loads on demand"}
+          </div>
+        </Section>
+
         <Section title="Prompt">
         <select
           style={selectStyle}
@@ -265,16 +271,6 @@ export function CaptionLeftPanel() {
             </Button>
           )}
         </div>
-        <div style={{ marginTop: 10 }}>
-          <Label>Temperature · {gen.temperature.toFixed(2)}</Label>
-          <Slider
-            min={0}
-            max={2}
-            step={0.05}
-            value={gen.temperature}
-            onChange={(temperature) => gen.set({ temperature })}
-          />
-        </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <input
             value={gen.seed}
@@ -283,24 +279,12 @@ export function CaptionLeftPanel() {
             style={{ ...selectStyle, width: 90 }}
           />
           <Button
-            onClick={() =>
-              gen.set({ seed: String(Math.floor(Math.random() * 1e9)) })
-            }
+            title="Random each run (-1)"
+            onClick={() => gen.set({ seed: "-1" })}
+            style={{ fontSize: 14, color: colors.textMuted }}
           >
-            ⟳
+            ⚄
           </Button>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <Label>Thinking</Label>
-          <Segmented
-            value={gen.think}
-            onChange={(think) => gen.set({ think })}
-            options={[
-              { value: "off", label: "Off" },
-              { value: "auto", label: "Auto" },
-              { value: "show", label: "On" },
-            ]}
-          />
         </div>
       </Section>
 
@@ -359,42 +343,20 @@ export function CaptionLeftPanel() {
           Review after generation
         </label>
         {gen.reviewAfter && (
-          <div style={{ margin: "2px 0 6px 22px" }}>
-            <select
-              value={gen.reviewJudge}
-              onChange={(event) => gen.set({ reviewJudge: event.target.value })}
-              style={{
-                width: "100%",
-                padding: "5px 8px",
-                borderRadius: 6,
-                border: `1px solid ${colors.borderControl}`,
-                background: colors.input,
-                color: colors.text,
-                fontSize: 12,
-              }}
-            >
-              <option value="">
-                Judge: same as captioner (
-                {status.data?.name ?? (gen.model || "none")})
-              </option>
-              {(models.data?.models ?? []).map((model) => (
-                <option key={model.name} value={model.name}>
-                  Judge: {model.name}
-                </option>
-              ))}
-            </select>
-            <div
-              style={{
-                fontSize: 10,
-                color: colors.textFaint,
-                marginTop: 4,
-                lineHeight: 1.4,
-              }}
-            >
-              After generating, the captioner is unloaded, the judge reviews the
-              new captions, and the app opens the Review tab. Fixes wait for you
-              — nothing is applied automatically.
-            </div>
+          <div
+            style={{
+              margin: "2px 0 6px 22px",
+              fontSize: 10,
+              color: colors.textFaint,
+              lineHeight: 1.4,
+            }}
+          >
+            After generating, the captioner is unloaded, the judge —{" "}
+            <span style={{ color: colors.textSecondary }}>
+              {judgeProfile?.name ?? "?"}
+            </span>{" "}
+            (Review tab) — reviews the new captions, and the app opens the
+            Review tab. Fixes wait for you — nothing is applied automatically.
           </div>
         )}
         {groundingEnabled && (
@@ -444,39 +406,21 @@ export function CaptionLeftPanel() {
       <div
         style={{
           flex: "none",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "10px 14px",
           borderTop: `1px solid ${colors.border}`,
           background: colors.panel,
         }}
+        title={loaded ? (loadedProfile?.file ?? status.data?.name ?? "") : ""}
       >
-        {modelOpen && (
+        <span style={{ color: loaded ? colors.ok : colors.textFaint }}>
+          {loaded ? "●" : "○"}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              padding: 14,
-              borderBottom: `1px solid ${colors.border}`,
-              maxHeight: 340,
-              overflowY: "auto",
-            }}
-          >
-            {modelControls}
-          </div>
-        )}
-        <div
-          onClick={() => setModelOpen((open) => !open)}
-          title={loaded ? status.data?.name ?? "" : "No model loaded"}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 14px",
-            cursor: "pointer",
-          }}
-        >
-          <span style={{ color: loaded ? colors.ok : colors.textFaint }}>
-            {loaded ? "●" : "○"}
-          </span>
-          <span
-            style={{
-              flex: 1,
               fontSize: 12,
               fontWeight: 600,
               overflow: "hidden",
@@ -485,13 +429,26 @@ export function CaptionLeftPanel() {
               color: loaded ? colors.text : colors.textMuted,
             }}
           >
-            {collapsedModelLabel}
-          </span>
-          {modelBusy && <Spinner size={11} />}
-          <span style={{ color: colors.textMuted, fontSize: 11 }}>
-            {modelOpen ? "▾" : "▴"}
-          </span>
+            {loaded
+              ? (loadedProfile?.name ?? status.data?.name ?? "Model loaded")
+              : "No model loaded"}
+          </div>
+          <div
+            style={{
+              fontFamily: font.mono,
+              fontSize: 9.5,
+              color: colors.textFaint,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {loaded
+              ? `${loadedProfile?.file ?? ""} · loaded`
+              : "unloaded — memory purged"}
+          </div>
         </div>
+        {modelBusy && <Spinner size={11} />}
       </div>
     </div>
   );

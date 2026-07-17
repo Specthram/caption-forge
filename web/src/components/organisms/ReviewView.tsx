@@ -16,8 +16,7 @@ import {
   useDecideBulk,
   useDecideFinding,
   useDeleteReviewRule,
-  useModels,
-  useModelStatus,
+  useProfiles,
   useReviewFindings,
   useReviewRules,
   useRunReview,
@@ -31,6 +30,7 @@ import { DiffText } from "../molecules/DiffText";
 import { useJobsStore } from "../../store/jobsStore";
 import { useSelectionStore } from "../../store/selectionStore";
 import { useUiStore } from "../../store/uiStore";
+import { ProfileSelector } from "./ProfileSelector";
 
 const RAIL_WIDTH = 284;
 const thumbUrl = (id: number) => `/api/media/${id}/thumb`;
@@ -45,7 +45,7 @@ export function ReviewView() {
   const rules = useReviewRules(datasetId);
   const findings = useReviewFindings(datasetId, null, datasetId != null);
   const runReview = useRunReview();
-  const [judge, setJudge] = useState("");
+  const profiles = useProfiles();
   const [scope, setScope] = useState("all");
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJobsStore((state) =>
@@ -101,7 +101,7 @@ export function ReviewView() {
         dataset_id: datasetId,
         caption_type: captionType,
         media_ids: mediaIds,
-        judge_model: judge,
+        judge_profile_id: profiles.data?.judge_id ?? null,
         scope,
       },
       { onSuccess: (data) => setJobId(data.job_id) },
@@ -117,8 +117,6 @@ export function ReviewView() {
       <Rail
         datasetId={datasetId}
         rules={rules.data?.rules ?? []}
-        judge={judge}
-        onJudge={setJudge}
         scope={scope}
         onScope={setScope}
         scopeCount={scopeCount}
@@ -150,8 +148,6 @@ interface JobLike {
 function Rail({
   datasetId,
   rules,
-  judge,
-  onJudge,
   scope,
   onScope,
   scopeCount,
@@ -161,8 +157,6 @@ function Rail({
 }: {
   datasetId: number;
   rules: ReviewRule[];
-  judge: string;
-  onJudge: (value: string) => void;
   scope: string;
   onScope: (value: string) => void;
   scopeCount: number | null;
@@ -170,14 +164,15 @@ function Rail({
   job: JobLike | undefined;
   onRun: () => void;
 }) {
-  const models = useModels();
-  const modelStatus = useModelStatus();
+  const profiles = useProfiles();
   const createRule = useCreateReviewRule();
   const [text, setText] = useState("");
   const [needsImage, setNeedsImage] = useState(false);
 
   const judgeLabel =
-    judge || modelStatus.data?.name || "the loaded model";
+    profiles.data?.profiles.find(
+      (p) => p.id === profiles.data.judge_id,
+    )?.name ?? "the judge profile";
 
   const add = () => {
     if (!text.trim()) return;
@@ -207,19 +202,8 @@ function Rail({
       }}
     >
       <section>
-        <SectionLabel>Judge model</SectionLabel>
-        <select
-          value={judge}
-          onChange={(event) => onJudge(event.target.value)}
-          style={selectStyle}
-        >
-          <option value="">Same as captioner ({modelStatus.data?.name ?? "none"})</option>
-          {(models.data?.models ?? []).map((model) => (
-            <option key={model.name} value={model.name}>
-              {model.name}
-            </option>
-          ))}
-        </select>
+        <SectionLabel>Judge profile</SectionLabel>
+        <ProfileSelector role="judge" />
         <p style={hintStyle}>
           A model confirms its own mistakes poorly — pick a judge separate from
           the captioner. It is swapped into VRAM for the run only.

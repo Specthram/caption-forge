@@ -56,7 +56,7 @@ def _run_det(dataset_id, scope="all", media_ids=None):
         dataset_id=dataset_id,
         caption_type="txt",
         media_ids=media_ids,
-        judge_model="",
+        judge_profile_id=None,
         scope=scope,
         rule_ids=[det["id"]],
     )

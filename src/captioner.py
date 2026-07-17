@@ -109,9 +109,14 @@ def _resize_to(img: Image.Image, max_size: int) -> Image.Image:
     )
 
 
-def _resize(img: Image.Image) -> Image.Image:
-    """Downscale an image to the configured caption size (Gemma capped)."""
-    max_size = get_caption_image_size()
+def _resize(img: Image.Image, max_size: int | None = None) -> Image.Image:
+    """Downscale an image to the caption size cap (Gemma capped).
+
+    ``max_size`` overrides the Settings cap for this call (model-profile
+    resolution); the Gemma encoder ceiling applies either way.
+    """
+    if max_size is None:
+        max_size = get_caption_image_size()
     # Gemma's vision encoder is fixed at 896px — never upscale past it.
     if loader.current_model_type in {"gemma3", "gemma3n"}:
         max_size = min(max_size, GEMMA_MAX_IMAGE_SIZE)
@@ -562,6 +567,7 @@ def generate_caption(
     seed: int,
     think_mode: str = "auto",
     max_new_tokens: int | None = None,
+    image_size: int | None = None,
 ) -> str:
     """Caption a single image and return the caption text.
 
@@ -569,8 +575,10 @@ def generate_caption(
     greedy where supported; ``seed`` ``-1`` is random; ``think_mode``
     ``auto``/``off`` strip reasoning, ``show`` keeps it; ``max_new_tokens``
     overrides the budget for this call (``None`` falls back to the loaded model
-    type's configured ceiling, e.g. JoyCaption's 512). Raises ``CaptionError``
-    when no captioner matches the loaded model or generation fails.
+    type's configured ceiling, e.g. JoyCaption's 512); ``image_size`` caps the
+    longest side for this call (``None`` reads the Settings cap). Raises
+    ``CaptionError`` when no captioner matches the loaded model or generation
+    fails.
     """
     global _budget_override  # pylint: disable=global-statement
     if max_new_tokens is None and loader.current_model_type:
@@ -582,7 +590,7 @@ def generate_caption(
             if isinstance(image_source, str)
             else image_source
         )
-        image = _resize(image)
+        image = _resize(image, image_size)
 
         captioner = _pick_captioner()
         if captioner is None:

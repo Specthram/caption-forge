@@ -49,7 +49,10 @@ import type {
   MediaGridPage,
   NavCounts,
   ModelInfo,
+  ModelProfile,
   ModelStatus,
+  ProfileDetect,
+  ProfilesResponse,
   PromptsResponse,
   QualityMetric,
   ResolutionKind,
@@ -651,6 +654,87 @@ export function useUnloadModel() {
   });
 }
 
+// -- Model profiles -----------------------------------------------------------
+
+export function useProfiles() {
+  return useQuery({
+    queryKey: ["profiles"],
+    queryFn: () => api.get<ProfilesResponse>("/profiles"),
+    // loaded_id follows load/unload/judge-swap jobs — poll like model-status.
+    refetchInterval: 4000,
+  });
+}
+
+/** Fields accepted by profile create/update (all optional server-side). */
+export type ProfileFields = Partial<Omit<ModelProfile, "id">>;
+
+function useProfilesInvalidator() {
+  const client = useQueryClient();
+  return useCallback(
+    () => client.invalidateQueries({ queryKey: ["profiles"] }),
+    [client],
+  );
+}
+
+export function useCreateProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: (vars: ProfileFields & { role?: "caption" | "judge" }) =>
+      api.post<ModelProfile>("/profiles", vars),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: ({ id, ...fields }: ProfileFields & { id: number }) =>
+      api.put<ModelProfile>(`/profiles/${id}`, fields),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: (id: number) => api.del<{ ok: boolean }>(`/profiles/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSelectProfile() {
+  const invalidate = useProfilesInvalidator();
+  return useMutation({
+    mutationFn: (vars: { role: "caption" | "judge"; id: number }) =>
+      api.post<{ ok: boolean }>("/profiles/select", vars),
+    onSuccess: invalidate,
+  });
+}
+
+/** Swap VRAM to a profile's weights (a job — progress via /ws/jobs). */
+export function useLoadProfile() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post<{ job_id: string }>(`/profiles/${id}/load`),
+  });
+}
+
+/** Re-run type/mmproj auto-detection for a picked weights file. */
+export function useDetectProfileFile() {
+  return useMutation({
+    mutationFn: (vars: { dir: string; file: string }) =>
+      api.post<ProfileDetect>("/profiles/detect", vars),
+  });
+}
+
+/** One folder listing of the profile editor's weights/mmproj picker. */
+export function useBrowseModelFiles(path: string) {
+  return useQuery({
+    queryKey: ["profile-browse", path],
+    queryFn: () => api.get<FileListing>("/profiles/browse", { path }),
+  });
+}
+
 // -- Generation -------------------------------------------------------------
 
 export interface GenerateVars {
@@ -659,12 +743,11 @@ export interface GenerateVars {
   media_ids: number[] | null;
   exclude_ids: number[] | null;
   prompt: string;
-  temperature: number;
+  /** Captioner profile: generation params come from it (lazy-swapped). */
+  profile_id: number | null;
   seed: number | null;
-  think_mode: string;
-  image_size: number;
   review_after: boolean;
-  review_judge_model?: string;
+  review_judge_profile_id?: number | null;
   ground_after: boolean;
   /** Off = only caption media whose caption is still empty. */
   recaption: boolean;
@@ -790,7 +873,7 @@ export function useRunReview() {
       dataset_id: number;
       caption_type: string;
       media_ids: number[] | null;
-      judge_model: string;
+      judge_profile_id: number | null;
       scope: string;
       rule_ids?: number[] | null;
       seed?: number | null;

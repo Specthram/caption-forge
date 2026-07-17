@@ -7,10 +7,10 @@ Three passes over the targeted media, unified into one finding queue:
 * **text** — text-only rules judged by the LLM with no image loaded.
 * **vision** — rules that need the image, judged by the VLM.
 
-The judge model is chosen independently from the captioner: it is loaded for
-the run and freed in a ``finally`` (house rule — a model job never leaves
-weights resident). An empty ``judge_model`` means "use whatever model is
-already loaded" (the "same as captioner" option); when nothing is loaded the
+The judge is a model profile chosen independently from the captioner: it is
+swapped into VRAM for the run and freed in a ``finally`` (house rule — a
+model job never leaves weights resident). A ``judge_profile_id`` of None
+means "use whatever model is already loaded"; when nothing is loaded the
 model passes are skipped and only the deterministic pass runs.
 
 The pure judging logic (prompt, JSON parsing, the anti-free-rewrite guard)
@@ -39,25 +39,46 @@ def _enabled_rules(dataset_ref, rule_ids) -> list:
     ]
 
 
-def _load_judge(judge_model: str, progress: Progress) -> bool:
-    """Load the named judge over the current slot; return whether we loaded.
+def _load_judge(judge_profile_id, progress: Progress) -> bool:
+    """Swap the judge profile into VRAM; return whether we loaded.
 
-    An empty name keeps the model already resident (the "same as captioner"
-    choice). A name that is not a local model is treated the same way (skip
-    the swap) rather than aborting the run.
+    ``None`` keeps the model already resident, as does an unknown profile or
+    one with no weights file (skip the swap rather than abort the run). A
+    judge already loaded is kept — and reported as not-ours so it survives
+    the run (the captioner keeps its slot).
     """
     # pylint: disable=import-outside-toplevel
-    from src import loader, scanner
+    from src import loader, model_profiles
 
-    if not judge_model:
+    if judge_profile_id is None:
         return False
-    cfg = scanner.scan_local_models().get(judge_model)
+    if model_profiles.get_loaded_id() == judge_profile_id:
+        return False
+    profile = model_profiles.get_profile(judge_profile_id)
+    cfg = model_profiles.load_cfg(profile) if profile else None
     if cfg is None:
         return False
-    progress(sub=f"loading judge {judge_model}…")
+    if loader.is_model_loaded():
+        for status, _loaded in loader.unload_model():
+            progress(sub=status)
+        model_profiles.set_loaded_id(None)
+    progress(sub=f"loading judge {profile['name']}…")
     for status, _loaded in loader.load_model(cfg):
         progress(sub=status)
+    if loader.is_model_loaded():
+        model_profiles.set_loaded_id(judge_profile_id)
     return True
+
+
+def _judge_name(judge_profile_id) -> str:
+    """Return the judge profile's display name for the run record, or ""."""
+    # pylint: disable=import-outside-toplevel
+    from src import model_profiles
+
+    if judge_profile_id is None:
+        return ""
+    profile = model_profiles.get_profile(judge_profile_id)
+    return profile["name"] if profile else ""
 
 
 def _trigger_words(dataset_ref) -> list:
@@ -136,7 +157,10 @@ def review_run_body(params):
             storage.reset_review_queue(dataset_ref)
 
         run_id = storage.open_review_run(
-            dataset_ref, params.judge_model, params.scope, len(targets)
+            dataset_ref,
+            _judge_name(params.judge_profile_id),
+            params.scope,
+            len(targets),
         )
 
         state = {"done": 0, "found": 0}
@@ -163,7 +187,7 @@ def review_run_body(params):
                 vision_rules,
                 caption_type,
                 seed,
-                params.judge_model,
+                params.judge_profile_id,
                 progress,
                 state,
             )
@@ -205,15 +229,15 @@ def _run_model_pass(
     vision_rules,
     caption_type,
     seed,
-    judge_model,
+    judge_profile_id,
     progress,
     state,
 ):
     """Load the judge, run the text + vision passes, then free it."""
     # pylint: disable=import-outside-toplevel
-    from src import loader
+    from src import loader, model_profiles
 
-    loaded = _load_judge(judge_model, progress)
+    loaded = _load_judge(judge_profile_id, progress)
     if not loaded and not loader.is_model_loaded():
         progress.warn("no judge model loaded — model rules skipped")
         return
@@ -227,6 +251,7 @@ def _run_model_pass(
             progress(sub="freeing judge…")
             for status, _done in loader.unload_model():
                 progress(sub=status)
+            model_profiles.set_loaded_id(None)
 
 
 def _judge_targets(

@@ -9,7 +9,7 @@ import {
   useGroundingEnabled,
   useIntegrityReview,
   useMediaDetail,
-  useModelStatus,
+  useProfiles,
   useRemoveTag,
   useRunReview,
   useSaveCaption,
@@ -177,7 +177,8 @@ export function CaptionDetailPanel() {
                   dataset_id: datasetId,
                   caption_type: captionType,
                   media_ids: [Number(data.key)],
-                  judge_model: "",
+                  // null = judge with whatever model is already loaded.
+                  judge_profile_id: null,
                   scope: "single",
                 },
                 { onSuccess: (res) => setPendingReviewJob(res.job_id) },
@@ -477,9 +478,10 @@ function useGenerateJob(onDone: () => void) {
 
 /**
  * Regenerate the focused media's caption with the VLM, reusing the left
- * panel's live prompt/params (through the shared caption store). Needs a
- * loaded model and a prompt; watches the streamed job to its end, then
- * refetches the caption so the new text lands in the editor.
+ * panel's live prompt (through the shared caption store) and the active
+ * model profile's params — the job lazy-swaps the profile into VRAM.
+ * Watches the streamed job to its end, then refetches the caption so the
+ * new text lands in the editor.
  */
 function RegenerateButton({
   mediaKey,
@@ -493,7 +495,7 @@ function RegenerateButton({
   disabled: boolean;
 }) {
   const gen = useCaptionStore();
-  const status = useModelStatus();
+  const profiles = useProfiles();
   const generate = useGenerate();
   const client = useQueryClient();
   const job = useGenerateJob(() => {
@@ -501,11 +503,13 @@ function RegenerateButton({
     client.invalidateQueries({ queryKey: ["caption-grid"] });
   });
 
-  const loaded = status.data?.loaded ?? false;
+  const active = profiles.data?.profiles.find(
+    (p) => p.id === profiles.data.active_id,
+  );
   const reason = disabled
     ? "Not available for this media"
-    : !loaded
-      ? "Load a model in the left panel first"
+    : !active?.file
+      ? "Pick a model profile with weights in the left panel first"
       : !gen.prompt.trim()
         ? "Pick a prompt preset in the left panel first"
         : null;
@@ -519,11 +523,12 @@ function RegenerateButton({
         media_ids: [Number(mediaKey)],
         exclude_ids: null,
         prompt: gen.prompt,
-        temperature: gen.temperature,
+        profile_id: profiles.data?.active_id ?? null,
         seed: gen.seed ? Number(gen.seed) : null,
-        think_mode: gen.think,
-        image_size: gen.imgRes,
         review_after: gen.reviewAfter,
+        review_judge_profile_id: gen.reviewAfter
+          ? (profiles.data?.judge_id ?? null)
+          : null,
         ground_after: gen.groundAfter,
         // An explicit per-media regenerate always rewrites, filled or not.
         recaption: true,

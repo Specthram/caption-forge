@@ -153,6 +153,29 @@ def detect_model(filename: str) -> dict | None:
     return None
 
 
+def hf_config_for(model_type: str, filename: str) -> str | None:
+    """Return the HF config repo for a family, sized from ``filename``.
+
+    Used when the family is forced manually (model profiles): the filename
+    may not match the family's pattern, so :func:`detect_model` cannot
+    resolve the repo. Size-variant rules read the size token from the
+    filename and fall back to the rule default. None for an unknown family.
+    """
+    stem = filename.lower()
+    for rule in _VISION_RULES:
+        if rule["type"] != model_type:
+            continue
+        if "hf_config_by_size" in rule:
+            size = next(
+                (s for s in rule["hf_config_by_size"] if s in stem), None
+            )
+            return rule["hf_config_by_size"].get(
+                size, rule["hf_config_default"]
+            )
+        return rule["hf_config"]
+    return None
+
+
 def _family_of(filename: str) -> str | None:
     """Return the model family a filename declares, or None if undeclared.
 

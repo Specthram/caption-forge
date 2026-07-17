@@ -16,6 +16,46 @@ class LoadModelBody(BaseModel):
     name: str
 
 
+class ProfileBody(BaseModel):
+    """Body for creating / updating a model profile.
+
+    Every field is optional: only the provided ones are applied (see
+    :func:`src.model_profiles.update_profile`); the rest keep their stored
+    (or factory) values. ``role`` is create-only: ``"caption"``/``"judge"``
+    selects the new profile for that slot.
+    """
+
+    name: str | None = None
+    file: str | None = None
+    dir: str | None = None
+    format: str | None = None
+    type: str | None = None
+    type_mode: str | None = None
+    temp: float | None = None
+    n_ctx: int | None = None
+    mmproj_mode: str | None = None
+    mmproj: str | None = None
+    think: str | None = None
+    max_tok: int | None = None
+    img_res: int | None = None
+    prompt: str | None = None
+    role: str | None = None
+
+
+class ProfileSelectBody(BaseModel):
+    """Body pointing the captioner or judge slot at a profile."""
+
+    role: str  # "caption" | "judge"
+    id: int
+
+
+class ProfileDetectBody(BaseModel):
+    """Body for re-running type/mmproj auto-detection on a picked file."""
+
+    dir: str
+    file: str
+
+
 class SaveCaptionBody(BaseModel):
     """Body for saving a caption on a media in a dataset.
 
@@ -77,12 +117,17 @@ class GenerateBody(BaseModel):
     media_ids: list[int] | None = None  # None = the whole dataset
     exclude_ids: list[int] | None = None  # locked media, never captioned
     prompt: str
+    # Captioner profile: generation params (temperature, thinking, image
+    # size, max tokens) come from it, and the job lazy-swaps it into VRAM
+    # when a different profile is resident. None = use the loaded model
+    # with the legacy field values below.
+    profile_id: int | None = None
     temperature: float = 0.7
     seed: int | None = None
     think_mode: str = "auto"
     image_size: int = 1024
     review_after: bool = False
-    review_judge_model: str = ""  # judge for review_after ("" = the captioner)
+    review_judge_profile_id: int | None = None  # judge for review_after
     ground_after: bool = False
     # Off = caption only media whose caption is still empty; on (default)
     # regenerates every targeted media, already-captioned ones included.
@@ -150,7 +195,7 @@ class ReviewRunBody(BaseModel):
     dataset_id: int
     caption_type: str
     media_ids: list[int] | None = None  # None = the whole dataset
-    judge_model: str = ""  # "" = use the loaded model (same as captioner)
+    judge_profile_id: int | None = None  # None = use the loaded model
     scope: str = "all"  # all | selection | flagged | single
     rule_ids: list[int] | None = None  # None = every enabled rule
     seed: int | None = None
