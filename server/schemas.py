@@ -26,6 +26,8 @@ class ProfileBody(BaseModel):
     """
 
     name: str | None = None
+    source: str | None = None  # "local" | "hf"
+    repo: str | None = None  # HF hub repo id (source == "hf")
     file: str | None = None
     dir: str | None = None
     format: str | None = None
@@ -47,6 +49,12 @@ class ProfileSelectBody(BaseModel):
 
     role: str  # "caption" | "judge"
     id: int
+
+
+class ProfilePromptBody(BaseModel):
+    """Body remembering the prompt preset last used with a profile."""
+
+    title: str
 
 
 class ProfileDetectBody(BaseModel):

@@ -436,6 +436,10 @@ CREATE TABLE IF NOT EXISTS review_finding (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'accepted', 'rejected')),
     applied_caption TEXT,
+    -- The live caption at accept time, so an undo restores exactly the text
+    -- the accept replaced (never the run-time original, which other accepts
+    -- may have already moved past).
+    undo_caption TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     decided_at TEXT
 );
@@ -878,6 +882,11 @@ def ensure_database(db_path=None):
                 ("query", "query TEXT"),
             ):
                 _ensure_column(conn, "watermark_zone", column, definition)
+            # Undo snapshot for review accepts (see review_queue): databases
+            # created before conflict-aware accepts lack the column.
+            _ensure_column(
+                conn, "review_finding", "undo_caption", "undo_caption TEXT"
+            )
             # v2 retired the per-zone "review" status: any pre-v2 zone still
             # carrying it becomes a plain detected zone (idempotent).
             conn.execute(

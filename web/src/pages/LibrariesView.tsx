@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useBulkTags,
-  useCreateUncategorizedTag,
   useMissingMedia,
   usePurgeMedia,
   useDeleteLibrary,
@@ -65,7 +64,6 @@ export function LibrariesView() {
   const reindexAll = useReindexAllLibraries();
   const indexRun = useIndexRun();
   const bulkTags = useBulkTags();
-  const createTag = useCreateUncategorizedTag();
 
   // The selected library and its page are restored after a refresh.
   const { activeId, page } = useUiStore((state) => state.librariesView);
@@ -377,19 +375,14 @@ export function LibrariesView() {
               <TagFilter
                 label="+ add tag"
                 selected={addTags}
-                onAdd={(tag) => setAddTags((prev) => [...prev, tag])}
+                allowCreate
+                onAdd={(tag) =>
+                  setAddTags((prev) =>
+                    prev.some((t) => t.id === tag.id) ? prev : [...prev, tag],
+                  )
+                }
                 onRemove={(id) =>
                   setAddTags((prev) => prev.filter((tag) => tag.id !== id))
-                }
-                onCreate={(name) =>
-                  createTag.mutate(name, {
-                    onSuccess: (data) =>
-                      setAddTags((prev) =>
-                        prev.some((tag) => tag.id === data.id)
-                          ? prev
-                          : [...prev, { id: data.id, name: data.name }],
-                      ),
-                  })
                 }
               />
               <div style={{ height: 6 }} />

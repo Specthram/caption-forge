@@ -28,7 +28,13 @@ def load_profile_body(model_cfg: dict, profile: dict):
             for status, _loaded in loader.unload_model():
                 progress(sub=status)
             model_profiles.set_loaded_id(None)
-        for status, _loaded in loader.load_model(model_cfg):
+
+        def on_bytes(done: int, total: int, label: str) -> None:
+            # Stream Hugging Face download progress as the job's byte counter;
+            # progress() raises JobStopped when the user cancels the download.
+            progress(done=done, total=total, sub=label)
+
+        for status, _loaded in loader.load_model(model_cfg, on_bytes=on_bytes):
             progress(sub=status)
         if loader.is_model_loaded():
             model_profiles.set_loaded_id(profile["id"])

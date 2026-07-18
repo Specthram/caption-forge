@@ -41,6 +41,7 @@ import type {
   HeatResponse,
   IndexStatus,
   LibraryCoverage,
+  HfRepoDetect,
   LibraryGridPage,
   LibrarySource,
   LookalikeResult,
@@ -732,11 +733,31 @@ export function useLoadProfile() {
   });
 }
 
+/**
+ * Remember the prompt preset last used with a profile. Fire-and-forget (no
+ * query invalidation): the panel tracks the live selection locally, this only
+ * persists it so the profile reopens on the same preset next session.
+ */
+export function useRememberPrompt() {
+  return useMutation({
+    mutationFn: (vars: { id: number; title: string }) =>
+      api.post(`/profiles/${vars.id}/prompt`, { title: vars.title }),
+  });
+}
+
 /** Re-run type/mmproj auto-detection for a picked weights file. */
 export function useDetectProfileFile() {
   return useMutation({
     mutationFn: (vars: { dir: string; file: string }) =>
       api.post<ProfileDetect>("/profiles/detect", vars),
+  });
+}
+
+/** Guess family/format/name from a Hugging Face repo id. */
+export function useDetectHfRepo() {
+  return useMutation({
+    mutationFn: (repo: string) =>
+      api.get<HfRepoDetect>("/profiles/detect-hf", { repo }),
   });
 }
 

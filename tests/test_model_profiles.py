@@ -7,8 +7,15 @@ Everything runs against the sandboxed user config layer (see
 import pytest
 from fastapi.testclient import TestClient
 
-from src import model_profiles
+from src import config, model_profiles
 from src.model_registry import hf_config_for
+
+_DEFAULT_HF_NAMES = [
+    "Qwen3-VL-2B-Instruct",
+    "Qwen3-VL-4B-Instruct",
+    "Qwen3-VL-8B-Instruct",
+    "Qwen3-VL-32B-Instruct",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -86,13 +93,17 @@ class TestMmproj:
 class TestStore:
     """CRUD, seeding, clamps and the selection fallbacks."""
 
-    def test_first_read_seeds_default(self):
-        """An empty store seeds one profile named Default, selected twice."""
+    def test_first_read_seeds_hf_defaults(self):
+        """An empty store seeds the Qwen HF profiles, first one selected."""
         data = model_profiles.list_profiles()
-        assert [p["name"] for p in data["profiles"]] == ["Default"]
-        first = data["profiles"][0]["id"]
-        assert data["active_id"] == first
-        assert data["judge_id"] == first
+        assert [p["name"] for p in data["profiles"]] == _DEFAULT_HF_NAMES
+        first = data["profiles"][0]
+        assert first["source"] == "hf"
+        assert first["repo"] == "Qwen/Qwen3-VL-2B-Instruct"
+        assert first["type"] == "qwen3"
+        assert first["format"] == "safetensors"
+        assert data["active_id"] == first["id"]
+        assert data["judge_id"] == first["id"]
         assert data["loaded_id"] is None
 
     def test_create_clamps_and_autonames(self, tmp_path):
@@ -153,18 +164,34 @@ class TestStore:
 
     def test_delete_falls_back_and_protects_last(self):
         """Deleting the selected profile falls back; the last is refused."""
-        data = model_profiles.list_profiles()
-        first = data["profiles"][0]["id"]
+        first = model_profiles.list_profiles()["profiles"][0]["id"]
         second = model_profiles.create_profile({"name": "B"})["id"]
         model_profiles.select_profile("caption", second)
         assert model_profiles.delete_profile(second) is True
-        data = model_profiles.list_profiles()
-        assert data["active_id"] == first
+        assert model_profiles.list_profiles()["active_id"] == first
+        # Down to one profile, the last is then protected.
+        others = [
+            p["id"]
+            for p in model_profiles.list_profiles()["profiles"]
+            if p["id"] != first
+        ]
+        for pid in others:
+            model_profiles.delete_profile(pid)
         assert model_profiles.delete_profile(first) is False
 
     def test_select_unknown_is_refused(self):
         """Selecting a nonexistent profile changes nothing."""
         assert model_profiles.select_profile("caption", 999) is False
+
+    def test_set_last_prompt_remembers_the_title(self):
+        """The last-used preset title is persisted on the profile."""
+        pid = model_profiles.list_profiles()["profiles"][0]["id"]
+        assert model_profiles.set_last_prompt(pid, "  Booru  ") is True
+        assert model_profiles.get_profile(pid)["prompt"] == "Booru"
+
+    def test_set_last_prompt_unknown_is_refused(self):
+        """Remembering a preset for a nonexistent profile changes nothing."""
+        assert model_profiles.set_last_prompt(999, "Booru") is False
 
 
 class TestLoadCfg:
@@ -212,11 +239,26 @@ class TestProfilesApi:
     """The /api/profiles routes end to end."""
 
     def test_list_seeds_and_reports_families(self, client):
-        """GET returns the seeded Default and the family table."""
+        """GET returns the seeded HF defaults and the family table."""
         body = client.get("/api/profiles").json()
-        assert [p["name"] for p in body["profiles"]] == ["Default"]
+        assert [p["name"] for p in body["profiles"]] == _DEFAULT_HF_NAMES
+        assert all(p["source"] == "hf" for p in body["profiles"])
         keys = {f["key"] for f in body["families"]}
         assert {"qwen3", "qwen3.6", "gemma4", "llava", "text"} <= keys
+
+    def test_detect_hf_route(self, client):
+        """The HF detect route guesses family, format and repo-tail name."""
+        body = client.get(
+            "/api/profiles/detect-hf",
+            params={"repo": "Qwen/Qwen3-VL-8B-Instruct"},
+        ).json()
+        assert body["type"] == "qwen3"
+        assert body["format"] == "safetensors"
+        assert body["name"] == "Qwen3-VL-8B-Instruct"
+        gguf = client.get(
+            "/api/profiles/detect-hf", params={"repo": "x/Some-Model-GGUF"}
+        ).json()
+        assert gguf["format"] == "gguf"
 
     def test_crud_roundtrip(self, client, tmp_path):
         """Create → update → delete through the API."""
@@ -242,8 +284,10 @@ class TestProfilesApi:
 
     def test_delete_last_is_409(self, client):
         """The last remaining profile cannot be deleted."""
-        only = client.get("/api/profiles").json()["profiles"][0]["id"]
-        assert client.delete(f"/api/profiles/{only}").status_code == 409
+        ids = [p["id"] for p in client.get("/api/profiles").json()["profiles"]]
+        for pid in ids[1:]:
+            assert client.delete(f"/api/profiles/{pid}").status_code == 200
+        assert client.delete(f"/api/profiles/{ids[0]}").status_code == 409
 
     def test_select_judge(self, client):
         """POST /select moves the judge slot."""
@@ -288,6 +332,91 @@ class TestProfilesApi:
 
     def test_load_without_file_is_409(self, client):
         """Loading a profile with no picked weights is refused."""
-        only = client.get("/api/profiles").json()["profiles"][0]["id"]
-        assert client.post(f"/api/profiles/{only}/load").status_code == 409
+        empty = client.post("/api/profiles", json={"name": "empty"}).json()
+        assert (
+            client.post(f"/api/profiles/{empty['id']}/load").status_code == 409
+        )
         assert client.post("/api/profiles/999/load").status_code == 404
+
+
+class TestHfProfiles:
+    """Hugging Face model-source profiles: data model, load_cfg, defaults."""
+
+    def test_create_hf_profile_autodetects(self):
+        """An HF safetensors repo derives family, format, name; no mmproj."""
+        profile = model_profiles.create_profile(
+            {"source": "hf", "repo": "Qwen/Qwen3-VL-8B-Instruct"}
+        )
+        assert profile["source"] == "hf"
+        assert profile["name"] == "Qwen3-VL-8B-Instruct"
+        assert profile["type"] == "qwen3"
+        assert profile["format"] == "safetensors"
+        assert profile["mmproj"] is None
+
+    def test_hf_gguf_repo_guesses_format(self):
+        """A repo whose name carries 'gguf' is treated as a GGUF source."""
+        profile = model_profiles.create_profile(
+            {"source": "hf", "repo": "unsloth/Qwen3-VL-4B-Instruct-GGUF"}
+        )
+        assert profile["format"] == "gguf"
+        assert profile["type"] == "qwen3"
+
+    def test_unknown_repo_type_is_blank(self):
+        """An unrecognised repo leaves the family for load-time resolution."""
+        profile = model_profiles.create_profile(
+            {"source": "hf", "repo": "someone/mystery-model"}
+        )
+        assert profile["type"] == ""
+
+    def test_hf_load_cfg(self):
+        """load_cfg for an HF profile points the loader at the repo."""
+        profile = model_profiles.create_profile(
+            {"source": "hf", "repo": "Qwen/Qwen3-VL-8B-Instruct"}
+        )
+        cfg = model_profiles.load_cfg(profile)
+        assert cfg["source"] == "hf"
+        assert cfg["repo"] == "Qwen/Qwen3-VL-8B-Instruct"
+        assert cfg["hf_config"] == "Qwen/Qwen3-VL-8B-Instruct"
+        assert cfg["type"] == "qwen3"
+        assert cfg["format"] == "safetensors"
+
+    def test_hf_load_cfg_requires_repo_slash(self):
+        """A repo id without an owner/name slash is not loadable."""
+        profile = model_profiles.create_profile(
+            {"source": "hf", "repo": "justaname"}
+        )
+        assert model_profiles.load_cfg(profile) is None
+
+    def test_cached_flag_follows_the_cache(self, monkeypatch):
+        """The per-profile ``cached`` flag reflects the hub cache probe."""
+        monkeypatch.setattr(
+            model_profiles,
+            "is_repo_cached",
+            lambda repo: repo.endswith("8B-Instruct"),
+        )
+        by_repo = {
+            p["repo"]: p["cached"]
+            for p in model_profiles.list_profiles()["profiles"]
+        }
+        assert by_repo["Qwen/Qwen3-VL-8B-Instruct"] is True
+        assert by_repo["Qwen/Qwen3-VL-2B-Instruct"] is False
+
+    def test_backfill_defaults_into_existing_store(self):
+        """A pre-HF store is back-filled once with the default profiles."""
+        config.save_model_profiles(
+            {
+                "profiles": [
+                    {"id": 1, "name": "Old", "source": "local", "repo": ""}
+                ],
+                "active_id": 1,
+                "judge_id": 1,
+                "next_id": 2,
+            }
+        )
+        data = model_profiles.list_profiles()
+        repos = {p.get("repo") for p in data["profiles"]}
+        assert set(model_profiles._DEFAULT_HF_REPOS) <= repos
+        assert any(p["name"] == "Old" for p in data["profiles"])
+        # A second read neither duplicates nor re-adds.
+        again = model_profiles.list_profiles()["profiles"]
+        assert len(again) == len(data["profiles"])

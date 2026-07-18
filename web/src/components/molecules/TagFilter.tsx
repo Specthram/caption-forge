@@ -1,9 +1,9 @@
-/** Tag include/exclude filter: search + selected chips. */
+/** Tag include/exclude filter: selected chips + the shared tag picker. */
 
-import { useState } from "react";
-import { useTagSearch } from "../../api/hooks";
+import { useMemo } from "react";
 import { colors } from "../../design/tokens";
 import { TagChip } from "./index";
+import { TagPicker } from "./TagPicker";
 
 export interface SelectedTag {
   id: number;
@@ -15,117 +15,40 @@ export function TagFilter({
   selected,
   onAdd,
   onRemove,
-  onCreate,
+  allowCreate = false,
 }: {
   label: string;
   selected: SelectedTag[];
   onAdd: (tag: SelectedTag) => void;
   onRemove: (id: number) => void;
-  /** When set, typing a name with no exact match offers to create it. */
-  onCreate?: (name: string) => void;
+  /** Offer to create a missing name (category-scoped) via the picker. */
+  allowCreate?: boolean;
 }) {
-  const [query, setQuery] = useState("");
-  const search = useTagSearch(query, query.length > 0);
-  const chosen = new Set(selected.map((tag) => tag.id));
-  const trimmed = query.trim();
-  const results = (search.data?.tags ?? []).filter(
-    (tag) => !chosen.has(tag.id),
+  const chosen = useMemo(
+    () => new Set(selected.map((tag) => tag.id)),
+    [selected],
   );
-  const exact = (search.data?.tags ?? []).some(
-    (tag) => tag.name.toLowerCase() === trimmed.toLowerCase(),
-  );
-  const canCreate = !!onCreate && trimmed.length > 0 && !exact;
 
   return (
-    <div style={{ position: "relative", minWidth: 150 }}>
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 4,
-          alignItems: "center",
-          padding: "3px 6px",
-          borderRadius: 6,
-          border: `1px solid ${colors.borderControl}`,
-          background: colors.input,
-        }}
-      >
-        {selected.map((tag) => (
-          <TagChip
-            key={tag.id}
-            name={tag.name}
-            color={colors.textMuted}
-            onRemove={() => onRemove(tag.id)}
-          />
-        ))}
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={label}
-          style={{
-            flex: 1,
-            minWidth: 70,
-            border: "none",
-            background: "transparent",
-            color: colors.text,
-            fontSize: 12,
-            outline: "none",
-          }}
-        />
-      </div>
-      {query && (results.length > 0 || canCreate) && (
-        <div
-          style={{
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            right: 0,
-            zIndex: 20,
-            marginTop: 2,
-            maxHeight: 200,
-            overflowY: "auto",
-            background: colors.panel,
-            border: `1px solid ${colors.borderHover}`,
-            borderRadius: 6,
-          }}
-        >
-          {results.map((tag) => (
-            <div
+    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+      {selected.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {selected.map((tag) => (
+            <TagChip
               key={tag.id}
-              onClick={() => {
-                onAdd({ id: tag.id, name: tag.name });
-                setQuery("");
-              }}
-              style={{
-                padding: "5px 9px",
-                fontSize: 12,
-                cursor: "pointer",
-                color: colors.textSecondary,
-              }}
-            >
-              {tag.name}
-            </div>
+              name={tag.name}
+              color={colors.textMuted}
+              onRemove={() => onRemove(tag.id)}
+            />
           ))}
-          {canCreate && (
-            <div
-              onClick={() => {
-                onCreate?.(trimmed);
-                setQuery("");
-              }}
-              style={{
-                padding: "5px 9px",
-                fontSize: 12,
-                cursor: "pointer",
-                color: colors.accent,
-                borderTop:
-                  results.length > 0 ? `1px solid ${colors.border}` : undefined,
-              }}
-            >
-              ➕ Create “{trimmed}” · Uncategorized
-            </div>
-          )}
         </div>
       )}
+      <TagPicker
+        placeholder={label}
+        exclude={chosen}
+        allowCreate={allowCreate}
+        onPick={onAdd}
+      />
     </div>
   );
 }

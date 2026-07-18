@@ -431,7 +431,14 @@ function DecisionPane({
     >
       {finding.stale && (
         <div style={staleBanner}>
-          The caption changed since this run — the diff may not apply.
+          Nothing left to apply — the caption already carries this fix.
+        </div>
+      )}
+      {finding.conflict && (
+        <div style={staleBanner}>
+          ⚠ Conflict: another accepted fix already changed this phrase.
+          Accept takes the version below, reject keeps the current text, or
+          edit inline to merge both by hand.
         </div>
       )}
       <Card title={<Badge color={style.color} background={style.background}>{style.label}</Badge>}>

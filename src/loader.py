@@ -410,6 +410,154 @@ def _load_local_processor(hf_config_id: str):
             return None
 
 
+# --- Hugging Face hub (full-weights download) ---
+
+# A mixed repo may ship both safetensors and gguf; the transformers path only
+# needs the safetensors + config, so gguf is skipped from the snapshot.
+_HF_SAFETENSORS_IGNORE = ("*.gguf",)
+
+
+def _progress_tqdm(on_step):
+    """Return a ``tqdm`` subclass reporting every byte increment to a callback.
+
+    huggingface_hub instantiates the class per downloaded file; the override
+    forwards each ``update(n)`` to ``on_step`` (which may raise to abort the
+    download — the cooperative cancel path) before the base bar advances.
+    """
+    # pylint: disable=import-outside-toplevel  # keep tqdm out of import cost
+    from tqdm.auto import tqdm as _base
+
+    class _ProgressTqdm(_base):  # pylint: disable=too-few-public-methods
+        def update(self, n=1):
+            on_step(n or 0)
+            return super().update(n)
+
+    return _ProgressTqdm
+
+
+def _hf_sizes(repo: str) -> dict:
+    """Return ``{filename: size_bytes}`` for every file in an HF repo."""
+    # pylint: disable=import-outside-toplevel
+    from huggingface_hub import HfApi
+
+    info = HfApi().model_info(repo, files_metadata=True)
+    return {s.rfilename: (s.size or 0) for s in info.siblings}
+
+
+def _hf_report(on_bytes, repo: str):
+    """Return an ``on_step(n)`` accumulating bytes into an ``on_bytes`` call.
+
+    ``on_bytes(done, total, label)`` is the job progress sink; ``None`` (a
+    non-job caller) yields a no-op. ``total`` is resolved lazily from the repo
+    metadata on first byte so a metadata hiccup never blocks the download.
+    """
+    if on_bytes is None:
+        return lambda _n: None, 0
+    total = sum(_hf_sizes(repo).values())
+    state = {"done": 0}
+
+    def on_step(n: int) -> None:
+        state["done"] += n
+        on_bytes(state["done"], total, f"downloading {repo}")
+
+    return on_step, total
+
+
+def _pick_gguf(names: list[str]) -> str:
+    """Return the preferred gguf (Q4_K_M > Q5_K_M > alphabetical first)."""
+    for want in ("q4_k_m", "q5_k_m", "q8_0"):
+        for name in names:
+            if want in name.lower():
+                return name
+    return sorted(names)[0]
+
+
+def _load_hf_safetensors(repo: str, model_type: str, on_bytes=None):
+    """Download a safetensors repo and load it via transformers."""
+    global model, processor, current_model_type, current_format
+
+    if not HF_HUB_AVAILABLE:
+        raise ImportError(
+            "huggingface-hub is required to download a Hugging Face model."
+        )
+    device = _resolve_device()
+    on_step, _total = _hf_report(on_bytes, repo)
+    local_dir = snapshot_download(
+        repo_id=repo,
+        ignore_patterns=list(_HF_SAFETENSORS_IGNORE),
+        tqdm_class=_progress_tqdm(on_step),
+    )
+
+    use_fast = model_type == "llava"
+    processor = AutoProcessor.from_pretrained(
+        local_dir,
+        trust_remote_code=True,
+        use_fast=use_fast,
+        local_files_only=True,
+    )
+    model = AutoModelForImageTextToText.from_pretrained(
+        local_dir,
+        dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        local_files_only=True,
+        trust_remote_code=True,
+    )
+    model = model.to(device).eval()
+    current_model_type = model_type
+    current_format = "transformers"
+
+
+def _load_hf_gguf(
+    repo: str, model_type: str, n_ctx: int | None = None, on_bytes=None
+):
+    """Download the gguf weights (+ mmproj) of a repo and load via llama-cpp.
+
+    Picks the preferred quant from the repo's gguf files and, when present, a
+    matching ``mmproj-*.gguf`` (vision); otherwise loads text-only.
+    """
+    if not HF_HUB_AVAILABLE:
+        raise ImportError(
+            "huggingface-hub is required to download a Hugging Face model."
+        )
+    # pylint: disable=import-outside-toplevel
+    from huggingface_hub import hf_hub_download
+
+    ggufs = [n for n in _hf_sizes(repo) if n.lower().endswith(".gguf")]
+    mmprojs = [n for n in ggufs if "mmproj" in n.lower()]
+    weights = [n for n in ggufs if "mmproj" not in n.lower()]
+    if not weights:
+        raise ValueError(f"No .gguf weights found in the repo {repo!r}.")
+    wanted = [_pick_gguf(weights)] + ([_pick_gguf(mmprojs)] if mmprojs else [])
+
+    on_step = _hf_gguf_report(on_bytes, repo, wanted)
+    tqdm_class = _progress_tqdm(on_step)
+    paths = [
+        hf_hub_download(repo_id=repo, filename=name, tqdm_class=tqdm_class)
+        for name in wanted
+    ]
+
+    weight_path = Path(paths[0])
+    if len(paths) > 1:
+        _load_gguf_vision(weight_path, Path(paths[1]), model_type, n_ctx=n_ctx)
+    else:
+        _load_gguf_text(str(weight_path), repo, model_type, n_ctx=n_ctx)
+
+
+def _hf_gguf_report(on_bytes, repo: str, wanted: list[str]):
+    """Return an ``on_step`` accumulating bytes over the chosen gguf files."""
+    if on_bytes is None:
+        return lambda _n: None
+    sizes = _hf_sizes(repo)
+    total = sum(sizes.get(name, 0) for name in wanted)
+    state = {"done": 0}
+
+    def on_step(n: int) -> None:
+        state["done"] += n
+        on_bytes(state["done"], total, f"downloading {repo}")
+
+    return on_step
+
+
 # --- Public API ---
 
 
@@ -421,9 +569,13 @@ def _track(gen):
         yield status, loaded
 
 
-def load_model(model_cfg: dict):
-    """Load a model, yielding (status, is_loaded) and tracking last_status."""
-    yield from _track(_load_model(model_cfg))
+def load_model(model_cfg: dict, on_bytes=None):
+    """Load a model, yielding (status, is_loaded) and tracking last_status.
+
+    ``on_bytes(done, total, label)`` (optional) receives Hugging Face download
+    progress in bytes; ``None`` disables progress reporting.
+    """
+    yield from _track(_load_model(model_cfg, on_bytes=on_bytes))
 
 
 def unload_model():
@@ -431,13 +583,52 @@ def unload_model():
     yield from _track(_unload_model())
 
 
-def _load_model(model_cfg: dict):
-    """Load a local model from ``model_cfg``, yielding (status, is_loaded).
+def _load_hf_model(model_cfg: dict, fmt: str, model_type: str, on_bytes):
+    """Download + load a Hugging Face model, yielding (status, is_loaded).
 
-    ``model_cfg`` keys (from :func:`scanner.scan_local_models`): ``format``
-    (``"safetensors"`` | ``"gguf"``), ``type`` (model family), ``local_path``
-    (Path to the weights), ``mmproj_path`` (Path | None, gguf vision projector)
-    and ``hf_config`` (HF repo id for config/processor metadata only).
+    A cancel raised through the download callback (the job's stop signal)
+    propagates untouched so the worker can mark the job stopped; any other
+    failure resets the loader globals and surfaces as an error status line.
+    """
+    global model, processor, current_model_type, current_format, loaded_name
+
+    repo = model_cfg["repo"]
+    yield f"⏳ Downloading {repo!r} from Hugging Face…\n", False
+    try:
+        if fmt == "safetensors":
+            _load_hf_safetensors(repo, model_type, on_bytes=on_bytes)
+        else:
+            _load_hf_gguf(
+                repo,
+                model_type,
+                n_ctx=model_cfg.get("n_ctx"),
+                on_bytes=on_bytes,
+            )
+        loaded_name = repo
+        yield f"✅ Model loaded from Hugging Face ({repo}).\n", True
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        model = None
+        processor = None
+        current_model_type = None
+        current_format = None
+        loaded_name = None
+        # A cooperative cancel (JobStopped, raised by the progress sink) must
+        # reach the job worker unaltered — src never imports server, so it is
+        # recognised by name rather than type to avoid the layering edge.
+        if type(exc).__name__ == "JobStopped":
+            raise
+        yield f"❌ Error: {exc}\n", False
+
+
+def _load_model(model_cfg: dict, on_bytes=None):
+    """Load a model from ``model_cfg``, yielding (status, is_loaded).
+
+    ``model_cfg`` keys: ``source`` (``"local"`` | ``"hf"``), ``format``
+    (``"safetensors"`` | ``"gguf"``), ``type`` (model family). Local loads
+    carry ``local_path`` (weights), ``mmproj_path`` (Path | None) and
+    ``hf_config`` (HF repo for config/processor metadata only); HF loads carry
+    ``repo`` (the weights repo, downloaded on first use). ``on_bytes`` streams
+    download progress for the HF path.
     """
     global model, processor, current_model_type, current_format, loaded_name
 
@@ -447,6 +638,11 @@ def _load_model(model_cfg: dict):
 
     fmt = model_cfg["format"]
     model_type = model_cfg["type"]
+
+    if model_cfg.get("source") == "hf":
+        yield from _load_hf_model(model_cfg, fmt, model_type, on_bytes)
+        return
+
     name = Path(model_cfg["local_path"]).name
 
     yield (

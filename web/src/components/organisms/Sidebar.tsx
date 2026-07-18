@@ -15,6 +15,7 @@ import {
   useModelStatus,
   useNavCounts,
   useProfiles,
+  useUnloadModel,
 } from "../../api/hooks";
 import type { ViewId } from "../../api/types";
 import { colors, font } from "../../design/tokens";
@@ -39,6 +40,50 @@ const NAV: NavDef[] = [
   { id: "system", label: "System", icon: <Server size={14} /> },
 ];
 
+/** Eject glyph freeing VRAM — reachable from every view (persistent rail). */
+function EjectButton({
+  busy,
+  onClick,
+}: {
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      title="Unload model — free VRAM"
+      disabled={busy}
+      onClick={onClick}
+      style={{
+        flex: "none",
+        width: 22,
+        height: 22,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 5,
+        border: "1px solid #2c2f38",
+        background: "#1b1d22",
+        color: "#9a9ba2",
+        fontSize: 11,
+        cursor: busy ? "default" : "pointer",
+        opacity: busy ? 0.5 : 1,
+      }}
+      onMouseEnter={(event) => {
+        event.currentTarget.style.color = "#e06c5c";
+        event.currentTarget.style.borderColor = "#57302b";
+        event.currentTarget.style.background = "#241715";
+      }}
+      onMouseLeave={(event) => {
+        event.currentTarget.style.color = "#9a9ba2";
+        event.currentTarget.style.borderColor = "#2c2f38";
+        event.currentTarget.style.background = "#1b1d22";
+      }}
+    >
+      ⏏
+    </button>
+  );
+}
+
 /** Abbreviate a total the way the rail's 10px mono column can hold it. */
 function short(value: number | undefined): string | undefined {
   if (value == null) return undefined;
@@ -56,6 +101,7 @@ export function Sidebar() {
   const status = useModelStatus();
   const profiles = useProfiles();
   const running = useRunningCount();
+  const unloadModel = useUnloadModel();
 
   // The loaded model shown as its profile (name + weights file); a model
   // loaded outside profiles falls back to the loader's filename.
@@ -63,6 +109,13 @@ export function Sidebar() {
   const loadedProfile = profiles.data?.profiles.find(
     (p) => p.id === profiles.data.loaded_id,
   );
+  // The "file" line shows the HF repo id for an HF profile, else the weights
+  // filename (falling back to the loader's own name for a non-profile load).
+  const loadedFile = loadedProfile
+    ? loadedProfile.source === "hf"
+      ? loadedProfile.repo
+      : loadedProfile.file
+    : (status.data?.name ?? "");
 
   // The Caption badge counts the dataset that tab is actually working on,
   // not the library: it is the size of the grid the user is about to see.
@@ -150,7 +203,7 @@ export function Sidebar() {
             gap: 8,
             marginBottom: 10,
           }}
-          title={loaded ? (loadedProfile?.file ?? status.data?.name ?? "") : ""}
+          title={loaded ? loadedFile : ""}
         >
           <Dot color={loaded ? colors.ok : colors.textFaint} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -177,11 +230,15 @@ export function Sidebar() {
                 whiteSpace: "nowrap",
               }}
             >
-              {loaded
-                ? `${loadedProfile?.file ?? status.data?.name ?? ""} · loaded`
-                : "unloaded — memory purged"}
+              {loaded ? `${loadedFile} · loaded` : "unloaded — memory purged"}
             </div>
           </div>
+          {loaded && (
+            <EjectButton
+              busy={unloadModel.isPending}
+              onClick={() => unloadModel.mutate()}
+            />
+          )}
         </div>
         <button
           onClick={() => toggleJobs()}

@@ -130,7 +130,7 @@ class TestDetRun:
         assert store.get_finding(finding["id"])["status"] == "accepted"
 
     def test_second_accept_merges_with_the_first(self, dataset):
-        """Accepting two findings keeps both fixes (diff-merge on accept)."""
+        """Two disjoint fixes accepted in sequence both land (base-coords)."""
         base = "a red ball on the grass."
         run_id = storage.open_review_run(dataset["dataset_id"], "", "all", 1)
         media_id = int(dataset["key"])
@@ -152,16 +152,67 @@ class TestDetRun:
         )
         storage.close_review_run(run_id, 2)
         storage.decide_review_finding(first, "accept")
-        # The sibling is rebased: its "original" now shows the first accept
-        # applied, and its proposal is the same fix on top of it.
-        sibling = store.get_finding(second)
-        assert sibling["caption_before"] == "a crimson ball on the grass."
-        assert sibling["caption_after"] == "a crimson ball on the lawn."
+        # Stored originals are never rewritten; the read path derives the
+        # displayed diff against the live caption instead.
+        assert store.get_finding(second)["caption_before"] == base
+        shown = next(
+            f
+            for f in storage.review_findings(dataset["dataset_id"])
+            if f["id"] == second
+        )
+        assert shown["caption_before"] == "a crimson ball on the grass."
+        assert shown["caption_after"] == "a crimson ball on the lawn."
+        assert shown["conflict"] is False
         storage.decide_review_finding(second, "accept")
         caption = storage.read_caption(
             dataset["dataset_id"], dataset["key"], "txt"
         )
         assert caption == "a crimson ball on the lawn."
+
+    def test_same_phrase_conflict_flagged_and_undo_exact(self, dataset):
+        """Same-phrase fixes: flagged as conflict, accept takes the judge's
+        version verbatim, undo restores exactly what the accept replaced."""
+        base = "a red ball on the grass."
+        run_id = storage.open_review_run(dataset["dataset_id"], "", "all", 1)
+        media_id = int(dataset["key"])
+        first = storage.record_review_finding(
+            run_id,
+            media_id,
+            "txt",
+            "color",
+            base,
+            "a crimson ball on the grass.",
+        )
+        second = storage.record_review_finding(
+            run_id,
+            media_id,
+            "txt",
+            "wording",
+            base,
+            "a scarlet sphere on the grass.",
+        )
+        storage.close_review_run(run_id, 2)
+        storage.decide_review_finding(first, "accept")
+        shown = next(
+            f
+            for f in storage.review_findings(dataset["dataset_id"])
+            if f["id"] == second
+        )
+        assert shown["conflict"] is True
+        # The proposal is the judge's rendering, never a word mixture.
+        assert shown["caption_after"] == "a scarlet sphere on the grass."
+        storage.decide_review_finding(second, "accept")
+        caption = storage.read_caption(
+            dataset["dataset_id"], dataset["key"], "txt"
+        )
+        assert caption == "a scarlet sphere on the grass."
+        # Undo the conflicting accept → back to the post-first state, not
+        # the run-time original.
+        storage.undo_review_finding(second)
+        caption = storage.read_caption(
+            dataset["dataset_id"], dataset["key"], "txt"
+        )
+        assert caption == "a crimson ball on the grass."
 
     def test_reject_all_then_clear_history(self, dataset):
         """Reject-all rejects every pending row; clear drops the decided."""

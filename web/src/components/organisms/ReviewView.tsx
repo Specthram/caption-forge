@@ -622,6 +622,13 @@ function FindingRow({
               {style.label}
             </Badge>
           </span>
+          {pending && finding.conflict && (
+            <span title="Another accepted fix already changed this phrase — accepting takes this version of it.">
+              <Badge color={colors.warn} background="rgba(224,179,86,0.14)">
+                ⚠ conflict
+              </Badge>
+            </span>
+          )}
           <span
             style={{
               fontSize: 11,

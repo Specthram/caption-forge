@@ -16,10 +16,11 @@ import {
   useModelStatus,
   useProfiles,
   usePrompts,
+  useRememberPrompt,
   useSavePrompt,
   useUndeploy,
-  useUnloadModel,
 } from "../../api/hooks";
+import type { JobSnapshot } from "../../api/types";
 import { colors, font } from "../../design/tokens";
 import { useUiStore } from "../../store/uiStore";
 import { useCaptionStore } from "../../store/captionStore";
@@ -47,13 +48,13 @@ export function CaptionLeftPanel() {
   const profiles = useProfiles();
   const status = useModelStatus();
   const loadProfile = useLoadProfile();
-  const unloadModel = useUnloadModel();
   const generate = useGenerate();
   const groundingEnabled = useGroundingEnabled();
   const deploy = useDeploy();
   const undeploy = useUndeploy();
   const savePrompt = useSavePrompt();
   const deletePrompt = useDeletePrompt();
+  const rememberPrompt = useRememberPrompt();
   const jobs = useJobList();
 
   const data = profiles.data;
@@ -90,16 +91,13 @@ export function CaptionLeftPanel() {
     }
   }, [reviewJob, reviewJobId, setCaptionTab]);
 
-  // Selecting a profile (or editing its default prompt) applies that preset
-  // as the panel's current prompt; otherwise fall back to the type's
-  // remembered preset, then the first one.
+  // Selecting a profile applies the preset it last used (auto-remembered) as
+  // the panel's current prompt, falling back to the first preset.
   useEffect(() => {
     if (prompts.data) {
       const list = prompts.data.prompts;
       const preset =
-        list.find((p) => p.title === active?.prompt) ??
-        list.find((p) => p.title === prompts.data.selected) ??
-        list[0];
+        list.find((p) => p.title === active?.prompt) ?? list[0];
       gen.set({ prompt: preset?.prompt ?? "" });
       setSelectedTitle(preset?.title ?? "");
     }
@@ -122,8 +120,16 @@ export function CaptionLeftPanel() {
   );
   const loaded = status.data?.loaded ?? false;
   const activeLoaded = active != null && active.id === data?.loaded_id;
-  const modelBusy =
-    !!modelJob || loadProfile.isPending || unloadModel.isPending;
+  const modelBusy = !!modelJob || loadProfile.isPending;
+  // A profile is loadable once it has weights: a picked file (local) or a
+  // valid owner/repo id (HF).
+  const activeLoadable =
+    active != null &&
+    (active.source === "hf" ? active.repo.includes("/") : !!active.file);
+  // While an HF download runs, the load job streams byte progress with a
+  // "downloading …" subtitle — surfaced as the inline progress card.
+  const downloadJob =
+    modelJob && modelJob.sub.startsWith("downloading") ? modelJob : null;
 
   const startGenerate = () => {
     if (datasetId == null || !data) return;
@@ -179,25 +185,24 @@ export function CaptionLeftPanel() {
       <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
         <Section title="Model profile">
           <ProfileSelector role="caption" />
-          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-            <Button
-              variant="accent"
-              style={{ flex: 1 }}
-              disabled={modelBusy || !active?.file || activeLoaded}
-              onClick={() => active && loadProfile.mutate(active.id)}
-            >
-              {modelBusy
-                ? modelJob?.sub || "Working…"
-                : "Load model"}
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={modelBusy || !loaded}
-              onClick={() => unloadModel.mutate()}
-            >
-              Unload
-            </Button>
-          </div>
+          <Button
+            variant="accent"
+            block
+            style={{ marginTop: 8 }}
+            disabled={modelBusy || !activeLoadable || activeLoaded}
+            onClick={() => active && loadProfile.mutate(active.id)}
+          >
+            {modelBusy ? modelJob?.sub || "Working…" : "Load model"}
+          </Button>
+          {downloadJob && active && (
+            <DownloadCard
+              repo={active.repo}
+              job={downloadJob}
+              onCancel={() =>
+                api.post(`/jobs/${downloadJob.id}/stop`).catch(() => {})
+              }
+            />
+          )}
           <div
             style={{
               marginTop: 8,
@@ -233,6 +238,10 @@ export function CaptionLeftPanel() {
             );
             setSelectedTitle(event.target.value);
             if (preset) gen.set({ prompt: preset.prompt });
+            // Remember it as this profile's last-used preset.
+            if (active) {
+              rememberPrompt.mutate({ id: active.id, title: event.target.value });
+            }
           }}
         >
           {prompts.data?.prompts.map((preset) => (
@@ -412,6 +421,87 @@ export function CaptionLeftPanel() {
           </a>
         )}
       </Section>
+      </div>
+    </div>
+  );
+}
+
+/** Inline Hugging Face download progress + cancel, under the Load button. */
+function DownloadCard({
+  repo,
+  job,
+  onCancel,
+}: {
+  repo: string;
+  job: JobSnapshot;
+  onCancel: () => void;
+}) {
+  const gb = (bytes: number) => (bytes / 1e9).toFixed(1);
+  const size =
+    job.total > 0 ? `${gb(job.done)} / ${gb(job.total)} GB` : `${gb(job.done)} GB`;
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        border: `1px solid ${colors.borderControl}`,
+        background: colors.input,
+        borderRadius: 6,
+        padding: "7px 8px",
+        fontFamily: font.mono,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontSize: 10,
+            color: colors.warn,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          downloading {repo}
+        </span>
+        <span style={{ fontSize: 10, color: colors.warn }}>{job.pct}%</span>
+      </div>
+      <div
+        style={{
+          height: 4,
+          borderRadius: 2,
+          background: "#24262d",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${job.pct}%`,
+            background: colors.warn,
+            transition: "width 0.3s",
+          }}
+        />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ flex: 1, fontSize: 9.5, color: colors.textFaint }}>
+          {size} · huggingface.co
+        </span>
+        <span
+          onClick={onCancel}
+          style={{ fontSize: 9.5, color: colors.danger, cursor: "pointer" }}
+          onMouseEnter={(event) => {
+            event.currentTarget.style.color = "#f08a7a";
+          }}
+          onMouseLeave={(event) => {
+            event.currentTarget.style.color = colors.danger;
+          }}
+        >
+          cancel
+        </span>
       </div>
     </div>
   );
