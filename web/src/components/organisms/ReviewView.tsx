@@ -13,8 +13,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCreateReviewRule,
+  useClearReviewHistory,
   useDecideBulk,
   useDecideFinding,
+  useRejectAll,
   useDeleteReviewRule,
   useProfiles,
   useReviewFindings,
@@ -47,6 +49,7 @@ export function ReviewView() {
   const runReview = useRunReview();
   const profiles = useProfiles();
   const [scope, setScope] = useState("all");
+  const [unloadAfter, setUnloadAfter] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJobsStore((state) =>
     jobId ? state.jobs[jobId] : undefined,
@@ -103,6 +106,7 @@ export function ReviewView() {
         media_ids: mediaIds,
         judge_profile_id: profiles.data?.judge_id ?? null,
         scope,
+        unload_after: unloadAfter,
       },
       { onSuccess: (data) => setJobId(data.job_id) },
     );
@@ -123,6 +127,8 @@ export function ReviewView() {
         running={running}
         job={job}
         onRun={run}
+        unloadAfter={unloadAfter}
+        onUnloadAfter={setUnloadAfter}
       />
       <Queue
         datasetId={datasetId}
@@ -154,6 +160,8 @@ function Rail({
   running,
   job,
   onRun,
+  unloadAfter,
+  onUnloadAfter,
 }: {
   datasetId: number;
   rules: ReviewRule[];
@@ -163,6 +171,8 @@ function Rail({
   running: boolean;
   job: JobLike | undefined;
   onRun: () => void;
+  unloadAfter: boolean;
+  onUnloadAfter: (value: boolean) => void;
 }) {
   const profiles = useProfiles();
   const createRule = useCreateReviewRule();
@@ -297,6 +307,14 @@ function Rail({
             ▶ Run review
           </Button>
         )}
+        <label style={checkRow}>
+          <input
+            type="checkbox"
+            checked={unloadAfter}
+            onChange={(event) => onUnloadAfter(event.target.checked)}
+          />
+          Unload the model after the run
+        </label>
         <p style={hintStyle}>
           Text-only rules run without loading images; vision rules load each
           one. Locked captions are skipped. Judge: {judgeLabel}.
@@ -441,6 +459,9 @@ function Queue({
   onOpenWizard: (index: number) => void;
 }) {
   const decideBulk = useDecideBulk();
+  const rejectAll = useRejectAll();
+  const clearHistory = useClearReviewHistory();
+  const decidedCount = counts.accepted + counts.rejected;
   const safeCount = list.filter(
     (f) => f.status === "pending" && SAFE_KINDS.has(f.rule_kind),
   ).length;
@@ -485,6 +506,43 @@ function Queue({
         <CountChip n={counts.accepted} label="accepted" color={colors.ok} />
         <CountChip n={counts.rejected} label="rejected" color={colors.danger} />
         <div style={{ flex: 1 }} />
+        {decidedCount > 0 && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Clear the review history (${decidedCount} decided ` +
+                    "findings)? Captions are not touched.",
+                )
+              ) {
+                clearHistory.mutate({ dataset_id: datasetId });
+              }
+            }}
+            loading={clearHistory.isPending}
+          >
+            🗑 Clear history · {decidedCount}
+          </Button>
+        )}
+        {counts.pending > 0 && (
+          <Button
+            variant="ghost"
+            style={{ color: colors.danger, borderColor: colors.danger }}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Reject all ${counts.pending} pending findings? ` +
+                    "Captions are not touched.",
+                )
+              ) {
+                rejectAll.mutate({ dataset_id: datasetId });
+              }
+            }}
+            loading={rejectAll.isPending}
+          >
+            ✕ Reject all · {counts.pending}
+          </Button>
+        )}
         {safeCount > 0 && (
           <Button
             variant="ghost"
@@ -564,6 +622,13 @@ function FindingRow({
               {style.label}
             </Badge>
           </span>
+          {pending && finding.conflict && (
+            <span title="Another accepted fix already changed this phrase — accepting takes this version of it.">
+              <Badge color={colors.warn} background="rgba(224,179,86,0.14)">
+                ⚠ conflict
+              </Badge>
+            </span>
+          )}
           <span
             style={{
               fontSize: 11,

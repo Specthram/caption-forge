@@ -125,69 +125,133 @@ def _edits(base_tokens: list, side_tokens: list) -> list:
     ]
 
 
-def apply_fix(base: str, current: str, incoming: str) -> str:
-    """Apply the ``base → incoming`` correction on top of ``current``.
+# A base segment ends on a word carrying sentence/clause punctuation, so a
+# conflict resolves over a whole sentence (prose) or a whole tag (booru).
+_SEGMENT_END = re.compile(r"[.!?;,]$")
 
-    Three-way word merge, so accepting one finding after another keeps the
-    earlier accept instead of resurrecting the run-time caption: regions the
-    fix rewrites take the fix's words, regions only ``current`` changed keep
-    the current words, and when both touched the same region the fix — the
-    one the user just accepted — wins.
+
+def _segment_bounds(tokens: list) -> list:
+    """Return the base's segments as token ranges (sentences / clauses)."""
+    bounds, start = [], 0
+    for index, token in enumerate(tokens):
+        if not token.isspace() and _SEGMENT_END.search(token):
+            end = index + 1
+            if end < len(tokens) and tokens[end].isspace():
+                end += 1
+            bounds.append((start, end))
+            start = end
+    if start < len(tokens) or not bounds:
+        bounds.append((start, len(tokens)))
+    return bounds
+
+
+def _overlaps(first: tuple, second: tuple) -> bool:
+    """Whether two base-coordinate edits collide (insertions zero-width)."""
+    a1, a2, _ = first
+    b1, b2, _ = second
+    if a1 == a2 and b1 == b2:  # two insertions at the same point collide
+        return a1 == b1
+    return a1 < b2 and b1 < a2
+
+
+def _replay(tokens: list, start: int, end: int, edits: list) -> list:
+    """Return ``tokens[start:end]`` with the (contained) edits applied."""
+    output = []
+    position = start
+    for span_start, span_end, replacement in sorted(
+        edits, key=lambda edit: (edit[0], edit[1])
+    ):
+        output.extend(tokens[position:span_start])
+        output.extend(replacement)
+        position = span_end
+    output.extend(tokens[position:end])
+    return output
+
+
+def resolve_fix(base: str, current: str, incoming: str) -> dict:
+    """Resolve the ``base → incoming`` fix against the live ``current``.
+
+    Git-style three-way merge that never re-locates a diff: both sides'
+    edits stay in the coordinates of the ``base`` they were computed
+    against, so collision detection is exact interval arithmetic — no fuzzy
+    matching, hence no false anchor when a sentence changed.
+
+    Edits that do not collide merge automatically, wherever they sit. When
+    the two sides collide, the *whole segment* (sentence / clause) around
+    the collision takes the incoming fix's rendering verbatim — one
+    coherent, judge-authored sentence, never an interleaving of two
+    rewrites — and the result is flagged so the UI shows a ⚠ conflict the
+    user settles with accept / reject / inline edit.
+
+    Returns ``{"text": str, "conflict": bool}``.
     """
     if base == incoming:  # no-op fix — never clobber the live caption
-        return current
+        return {"text": current, "conflict": False}
     if current in (base, incoming):
-        return incoming
+        return {"text": incoming, "conflict": False}
     tokens = _tokens(base)
     ours = _edits(tokens, _tokens(current))
     theirs = _edits(tokens, _tokens(incoming))
 
-    merged = []
-    cursor = 0  # position in base tokens
-    oi = ti = 0
-    while oi < len(ours) or ti < len(theirs):
-        # Open the next cluster at the earliest remaining edit, then absorb
-        # every span (either side) that overlaps or touches it.
-        start = min(
-            edits[index][0]
-            for edits, index in ((ours, oi), (theirs, ti))
-            if index < len(edits)
+    # Group the base's segments so every edit falls entirely inside one
+    # group (an edit spanning a boundary fuses the neighbours).
+    groups = _segment_bounds(tokens)
+    for start, end, _ in ours + theirs:
+        end = max(end, min(start + 1, len(tokens)))
+        touched = [g for g in groups if g[0] < end and start < g[1]] or [
+            groups[-1]
+        ]
+        fused = (
+            min(g[0] for g in touched),
+            max(g[1] for g in touched),
         )
-        end = start
-        cluster_ours, cluster_theirs = [], []
+        groups = [g for g in groups if g not in touched]
+        groups.append(fused)
+        groups.sort()
 
-        def touches(span_start, cluster_end):
-            """Overlap, or separated from the cluster by whitespace only."""
-            return span_start <= cluster_end or all(
-                token.isspace() for token in tokens[cluster_end:span_start]
+    merged = []
+    conflict = False
+    for index, (group_start, group_end) in enumerate(groups):
+        last = index == len(groups) - 1
+        inside_ours = [
+            e for e in ours if _inside(e, group_start, group_end, last)
+        ]
+        inside_theirs = [
+            e for e in theirs if _inside(e, group_start, group_end, last)
+        ]
+        collides = any(
+            _overlaps(first, second)
+            for first in inside_ours
+            for second in inside_theirs
+        )
+        if collides:
+            # The judge's whole sentence, verbatim; our edits there drop.
+            conflict = True
+            merged.extend(
+                _replay(tokens, group_start, group_end, inside_theirs)
             )
+        else:
+            merged.extend(
+                _replay(
+                    tokens,
+                    group_start,
+                    group_end,
+                    inside_ours + inside_theirs,
+                )
+            )
+    return {"text": "".join(merged), "conflict": conflict}
 
-        grew = True
-        while grew:
-            grew = False
-            while oi < len(ours) and touches(ours[oi][0], end):
-                cluster_ours.append(ours[oi])
-                end = max(end, ours[oi][1])
-                oi += 1
-                grew = True
-            while ti < len(theirs) and touches(theirs[ti][0], end):
-                cluster_theirs.append(theirs[ti])
-                end = max(end, theirs[ti][1])
-                ti += 1
-                grew = True
-        merged.extend(tokens[cursor:start])
-        # Conflicting cluster → the incoming fix wins; otherwise replay the
-        # only side that touched it.
-        winner = cluster_theirs if cluster_theirs else cluster_ours
-        position = start
-        for span_start, span_end, replacement in winner:
-            merged.extend(tokens[position:span_start])
-            merged.extend(replacement)
-            position = span_end
-        merged.extend(tokens[position:end])
-        cursor = end
-    merged.extend(tokens[cursor:])
-    return "".join(merged)
+
+def _inside(edit: tuple, start: int, end: int, last: bool) -> bool:
+    """Whether an edit falls inside ``[start, end)`` (inserts included).
+
+    An insertion belongs to the group containing its point; one sitting at
+    the very end of the text belongs to the last group.
+    """
+    e1, e2, _ = edit
+    if e1 == e2:
+        return start <= e1 < end or (last and e1 == end)
+    return start <= e1 and e2 <= end
 
 
 def judged_finding(before: str, verdict: dict | None) -> dict | None:

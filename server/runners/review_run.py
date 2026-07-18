@@ -129,6 +129,18 @@ def _judge_rule(rule, target, seed) -> dict | None:
     return caption_judge.judged_finding(target["caption"], verdict)
 
 
+def _unload_resident(progress: Progress) -> None:
+    """Free whatever model is still resident (the unload-after toggle)."""
+    # pylint: disable=import-outside-toplevel
+    from src import loader
+
+    if not loader.is_model_loaded():
+        return
+    progress(sub="freeing the model…")
+    for status, _done in loader.unload_model():
+        progress(sub=status)
+
+
 def review_run_body(params):
     """Return a job body running a rule-based review over a dataset.
 
@@ -193,6 +205,8 @@ def review_run_body(params):
             )
 
         storage.close_review_run(run_id, state["found"])
+        if params.unload_after:
+            _unload_resident(progress)
         return {"reviewed": len(targets), "findings": state["found"]}
 
     return run

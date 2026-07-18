@@ -41,6 +41,7 @@ import type {
   HeatResponse,
   IndexStatus,
   LibraryCoverage,
+  HfRepoDetect,
   LibraryGridPage,
   LibrarySource,
   LookalikeResult,
@@ -61,6 +62,7 @@ import type {
   ReviewFindingsResponse,
   ReviewRule,
   CleanupCategory,
+  CleanupCount,
   CleanupReport,
   CleanupResult,
   SystemDatabase,
@@ -234,6 +236,18 @@ export function useCleanupReport() {
   return useQuery({
     queryKey: ["system-cleanup"],
     queryFn: () => api.get<CleanupReport>("/system/cleanup"),
+  });
+}
+
+/**
+ * One cleanup category's live ``{count, bytes}``. Each System-view row
+ * fetches its own report so a slow scan (patch orphans, big cache trees)
+ * shows its own loader instead of stalling the whole block.
+ */
+export function useCleanupCategory(category: CleanupCategory) {
+  return useQuery({
+    queryKey: ["system-cleanup", category],
+    queryFn: () => api.get<CleanupCount>(`/system/cleanup/${category}`),
   });
 }
 
@@ -719,11 +733,31 @@ export function useLoadProfile() {
   });
 }
 
+/**
+ * Remember the prompt preset last used with a profile. Fire-and-forget (no
+ * query invalidation): the panel tracks the live selection locally, this only
+ * persists it so the profile reopens on the same preset next session.
+ */
+export function useRememberPrompt() {
+  return useMutation({
+    mutationFn: (vars: { id: number; title: string }) =>
+      api.post(`/profiles/${vars.id}/prompt`, { title: vars.title }),
+  });
+}
+
 /** Re-run type/mmproj auto-detection for a picked weights file. */
 export function useDetectProfileFile() {
   return useMutation({
     mutationFn: (vars: { dir: string; file: string }) =>
       api.post<ProfileDetect>("/profiles/detect", vars),
+  });
+}
+
+/** Guess family/format/name from a Hugging Face repo id. */
+export function useDetectHfRepo() {
+  return useMutation({
+    mutationFn: (repo: string) =>
+      api.get<HfRepoDetect>("/profiles/detect-hf", { repo }),
   });
 }
 
@@ -751,6 +785,8 @@ export interface GenerateVars {
   ground_after: boolean;
   /** Off = only caption media whose caption is still empty. */
   recaption: boolean;
+  /** On = free the VRAM when the job ends (default: model stays loaded). */
+  unload_after?: boolean;
 }
 
 export function useGenerate() {
@@ -877,6 +913,7 @@ export function useRunReview() {
       scope: string;
       rule_ids?: number[] | null;
       seed?: number | null;
+      unload_after?: boolean;
     }) => api.post<{ job_id: string }>("/review/run", vars),
   });
 }
@@ -905,6 +942,26 @@ export function useUndoFinding() {
     mutationFn: (id: number) =>
       api.post<{ finding: ReviewFinding }>(`/review/findings/${id}/undo`),
     onSuccess: () => invalidate(),
+  });
+}
+
+/** Reject every pending finding of the dataset (captions untouched). */
+export function useRejectAll() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { dataset_id: number }) =>
+      api.post<{ rejected: number }>("/review/findings/reject_all", vars),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
+  });
+}
+
+/** Delete the decided findings (the history); pending ones stay. */
+export function useClearReviewHistory() {
+  const invalidate = useReviewInvalidator();
+  return useMutation({
+    mutationFn: (vars: { dataset_id: number }) =>
+      api.post<{ cleared: number }>("/review/findings/clear_history", vars),
+    onSuccess: (_data, vars) => invalidate(vars.dataset_id),
   });
 }
 

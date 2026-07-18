@@ -485,3 +485,57 @@ def prune_unused_revisions() -> int:
                 f"WHERE {_UNUSED_REVISION_WHERE}"
             )
             return cursor.rowcount
+
+
+def unused_revision_bytes() -> int:
+    """Return the text weight (bytes) of the prunable caption revisions."""
+    row = _query_one(
+        "SELECT COALESCE(SUM(LENGTH(content)), 0) AS b "
+        f"FROM caption_revision WHERE {_UNUSED_REVISION_WHERE}"
+    )
+    return row["b"] if row else 0
+
+
+# Captions belonging to a media that sits in no dataset: browsable nowhere
+# in a dataset context, so their whole history is prunable. The media row
+# itself stays (it belongs to a library).
+_UNLINKED_CAPTION_WHERE = (
+    "media_id NOT IN (SELECT media_id FROM dataset_media)"
+)
+
+
+def unlinked_caption_report() -> dict:
+    """Return ``{count, bytes}`` for captions of media in no dataset.
+
+    ``count`` is caption rows (media × type); ``bytes`` the text weight of
+    their entire revision histories.
+    """
+    row = _query_one(
+        "SELECT COUNT(DISTINCT c.id) AS n, "
+        "COALESCE(SUM(LENGTH(r.content)), 0) AS b FROM caption c "
+        "LEFT JOIN caption_revision r ON r.caption_id = c.id "
+        f"WHERE c.{_UNLINKED_CAPTION_WHERE}"
+    )
+    if row is None:
+        return {"count": 0, "bytes": 0}
+    return {"count": row["n"], "bytes": row["b"]}
+
+
+def purge_unlinked_captions() -> int:
+    """Delete the caption histories of media in no dataset; return count.
+
+    Ancestry links are cleared first (``parent_revision_id`` carries no
+    cascade); the caption rows then cascade their revisions, whose review /
+    grounding / score children cascade in turn.
+    """
+    with closing(db.connect()) as conn:
+        with conn:
+            conn.execute(
+                "UPDATE caption_revision SET parent_revision_id = NULL "
+                "WHERE caption_id IN "
+                f"(SELECT id FROM caption WHERE {_UNLINKED_CAPTION_WHERE})"
+            )
+            cursor = conn.execute(
+                f"DELETE FROM caption WHERE {_UNLINKED_CAPTION_WHERE}"
+            )
+            return cursor.rowcount

@@ -1,13 +1,12 @@
 /** Media-tab right detail panel (330px): meta, quality, tags, captions. */
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   useAddTag,
   useGroundingEnabled,
   useMediaFullDetail,
   useMediaInvalidator,
   useRemoveTag,
-  useTagCategories,
   useToggleFavorite,
   useWatermarkMedia,
 } from "../../api/hooks";
@@ -20,6 +19,7 @@ import {
 import { useUiStore } from "../../store/uiStore";
 import { Button, Dot, IconButton, Label } from "../atoms";
 import { TagChip } from "../molecules";
+import { TagPicker } from "../molecules/TagPicker";
 import { CropSection } from "./CropSection";
 import { TagGroundingCard } from "./GroundingCard";
 import { MediaTagScoreCard } from "./MediaTagScoreCard";
@@ -50,10 +50,8 @@ export function MediaDetailPanel({
   const toggleFav = useToggleFavorite();
   const addTag = useAddTag();
   const removeTag = useRemoveTag();
-  const categories = useTagCategories();
   const groundingEnabled = useGroundingEnabled();
   const invalidateMedia = useMediaInvalidator();
-  const [newTag, setNewTag] = useState("");
 
   // A focus restored from the last session can name a media that has since
   // been deleted: drop it rather than sit on "Loading…" forever.
@@ -73,6 +71,10 @@ export function MediaDetailPanel({
       </Aside>
     );
   }
+
+  const tagIds = new Set(
+    data.tags.flatMap((group) => group.tags.map((tag) => tag.id)),
+  );
 
   return (
     <Aside onClose={onClose}>
@@ -240,27 +242,17 @@ export function MediaDetailPanel({
               </div>
             </div>
           ))}
-          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-            <input
-              value={newTag}
-              onChange={(event) => setNewTag(event.target.value)}
+          <div style={{ marginTop: 6 }}>
+            <TagPicker
               placeholder="+ add tag"
-              style={inputStyle}
-            />
-            <Button
-              disabled={!newTag.trim() || !categories.data}
-              onClick={() => {
-                const category = categories.data?.categories[0];
-                if (!category) return;
+              exclude={tagIds}
+              onPick={(tag) =>
                 addTag.mutate(
-                  { key: data.key, name: newTag.trim(), category_id: category.id },
+                  { key: data.key, tag_id: tag.id },
                   { onSuccess: invalidateMedia },
-                );
-                setNewTag("");
-              }}
-            >
-              +
-            </Button>
+                )
+              }
+            />
           </div>
         </div>
 
@@ -432,13 +424,3 @@ function WatermarkEncart({ mediaKey }: { mediaKey: string }) {
     </div>
   );
 }
-
-const inputStyle = {
-  flex: 1,
-  padding: "5px 8px",
-  borderRadius: 6,
-  border: `1px solid ${colors.borderControl}`,
-  background: colors.input,
-  color: colors.text,
-  fontSize: 12,
-} as const;

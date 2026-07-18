@@ -146,3 +146,15 @@ def decide_bulk(body: ReviewBulkDecideBody) -> dict:
     else:
         applied = storage.accept_rule_fixes(body.dataset_id, body.rule_id)
     return {"accepted": applied}
+
+
+@router.post("/findings/reject_all")
+def reject_all(body: ReviewBulkDecideBody) -> dict:
+    """Reject every pending finding of a dataset (captions untouched)."""
+    return {"rejected": storage.reject_all_findings(body.dataset_id)}
+
+
+@router.post("/findings/clear_history")
+def clear_history(body: ReviewBulkDecideBody) -> dict:
+    """Delete the decided findings (history); pending ones stay."""
+    return {"cleared": storage.clear_review_history(body.dataset_id)}

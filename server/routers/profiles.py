@@ -12,7 +12,12 @@ from fastapi import APIRouter, HTTPException
 
 from server.jobs import manager
 from server.runners import model as model_runner
-from server.schemas import ProfileBody, ProfileDetectBody, ProfileSelectBody
+from server.schemas import (
+    ProfileBody,
+    ProfileDetectBody,
+    ProfilePromptBody,
+    ProfileSelectBody,
+)
 from src import fs_browse, model_profiles
 from src.settings import get_model_dir
 
@@ -56,6 +61,14 @@ def select_profile(body: ProfileSelectBody) -> dict:
     return {"ok": True}
 
 
+@router.post("/{profile_id}/prompt")
+def remember_prompt(profile_id: int, body: ProfilePromptBody) -> dict:
+    """Remember the prompt preset last used with a profile."""
+    if not model_profiles.set_last_prompt(profile_id, body.title):
+        raise HTTPException(status_code=404, detail="profile not found")
+    return {"ok": True}
+
+
 @router.post("/detect")
 def detect(body: ProfileDetectBody) -> dict:
     """Re-run type / mmproj auto-detection for a picked weights file."""
@@ -65,6 +78,22 @@ def detect(body: ProfileDetectBody) -> dict:
         "format": model_profiles.detect_format(body.file),
         "mmproj": model_profiles.auto_mmproj(body.dir, body.file, family),
         "name": Path(body.file).stem,
+    }
+
+
+@router.get("/detect-hf")
+def detect_hf(repo: str = "") -> dict:
+    """Guess the family / format / name for a Hugging Face repo id.
+
+    ``type`` is auto-detected from the repo tail (empty → the editor shows a
+    "from repo config" badge, resolved from the config at load); ``format`` is
+    guessed from the repo name; ``name`` is the repo tail.
+    """
+    repo = repo.strip()
+    return {
+        "type": model_profiles.detect_repo_type(repo) if repo else "",
+        "format": "gguf" if "gguf" in repo.lower() else "safetensors",
+        "name": repo.rsplit("/", 1)[-1] if repo else "",
     }
 
 
@@ -101,10 +130,20 @@ def load_profile(profile_id: int) -> dict:
         raise HTTPException(
             status_code=409, detail="profile has no weights file"
         )
+    # An HF profile whose repo is not yet cached downloads on first load: name
+    # the job so the drawer reads "Download <repo>" with a byte progress bar.
+    downloads = profile.get(
+        "source"
+    ) == "hf" and not model_profiles.is_repo_cached(profile.get("repo") or "")
+    name = (
+        f"Download {profile['repo']}"
+        if downloads
+        else f"Load {profile['name']}"
+    )
     job = manager.submit(
         "load-model",
-        f"Load {profile['name']}",
+        name,
         model_runner.load_profile_body(cfg, profile),
-        sub="loading",
+        sub="downloading" if downloads else "loading",
     )
     return {"job_id": job.id}

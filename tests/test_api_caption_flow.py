@@ -448,3 +448,41 @@ def test_generate_skips_filled_captions_when_recaption_off(
     assert result["done"] == 1
     assert storage.read_caption(dataset_id, filled, "txt") == "already there"
     assert storage.read_caption(dataset_id, empty, "txt") == "fresh"
+
+
+def test_generate_unloads_model_when_asked(
+    store_db, thumb_cache_dir, tmp_path, monkeypatch
+):
+    """With ``unload_after``, the job frees the resident model at the end."""
+    # pylint: disable=unused-argument
+    from server.runners import generate as generate_runner
+    from server.schemas import GenerateBody
+    from src import loader
+
+    Image.new("RGB", (64, 64), (219, 68, 55)).save(tmp_path / "a.png")
+    library_id = store.create_library("fixtures", str(tmp_path))
+    store.scan_library(library_id)
+    dataset_id = store.create_dataset("shapes")
+    for row in store.list_library_media():
+        store.add_media_to_dataset(dataset_id, row["id"])
+
+    unloaded = []
+    monkeypatch.setattr(
+        generate_runner,
+        "_caption_one",
+        lambda path, params, seed, profile: "text",
+    )
+    monkeypatch.setattr(loader, "is_model_loaded", lambda: True)
+    monkeypatch.setattr(
+        loader,
+        "unload_model",
+        lambda: unloaded.append(1) or iter([("freed", True)]),
+    )
+    params = GenerateBody(
+        dataset_id=dataset_id,
+        caption_type="txt",
+        prompt="p",
+        unload_after=True,
+    )
+    generate_runner.generate_body(params)(lambda **kwargs: None)
+    assert unloaded == [1]

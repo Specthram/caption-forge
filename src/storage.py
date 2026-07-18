@@ -850,22 +850,29 @@ def review_counts(dataset_ref) -> dict:
 
 
 def _enrich_finding(finding: dict) -> dict:
-    """Return a finding with its caption type, media key and stale flag.
+    """Return a finding with its type, key and the *resolved* pending diff.
 
-    ``stale`` is true when the media's *current* caption no longer matches
-    the ``caption_before`` the diff was computed against (a manual edit landed
-    meanwhile), so the front can skip a proposal that no longer applies.
+    Pending rows display :func:`src.caption_judge.resolve_fix` output —
+    exactly what an accept would write. ``conflict`` = fix overlaps an
+    already-changed region; ``stale`` = nothing left to apply.
     """
     type_row = store.get_caption_type(finding["caption_type_id"])
     caption_type = type_row["name"] if type_row else ""
     key = str(finding["media_id"])
     current = read_caption(finding["dataset_id"], key, caption_type)
     data = dict(finding)
-    data["caption_type"] = caption_type
-    data["key"] = key
-    data["stale"] = (
-        current.strip() != (finding["caption_before"] or "").strip()
-    )
+    data["caption_type"], data["key"] = caption_type, key
+    data["conflict"] = data["stale"] = False
+    if finding["status"] == store.STATUS_PENDING:
+        resolved = caption_judge.resolve_fix(
+            finding["caption_before"] or "",
+            current,
+            finding["caption_after"] or "",
+        )
+        data["caption_before"] = current
+        data["caption_after"] = resolved["text"]
+        data["conflict"] = resolved["conflict"]
+        data["stale"] = resolved["text"].strip() == current.strip()
     return data
 
 
@@ -956,50 +963,36 @@ def record_review_finding(
 def _apply_accept(finding: dict, caption: str = None) -> None:
     """Write the accepted caption as a new revision for a finding's media.
 
-    The finding's fix is merged into the *live* caption
-    (:func:`src.caption_judge.apply_fix`), never written verbatim: accepting
-    a second finding must not resurrect the run-time caption and erase the
-    first accept (or a manual edit made since the run). An explicit
-    ``caption`` (inline edit before accept) still wins as-is.
+    The stored before/after stay the run-time originals; the fix is resolved
+    against the *live* caption (:func:`src.caption_judge.resolve_fix`), the
+    same computation the read path displays. The pre-accept caption is
+    snapshotted for an exact undo; an explicit ``caption`` wins as-is.
     """
     type_row = store.get_caption_type(finding["caption_type_id"])
     caption_type = type_row["name"] if type_row else ""
-    if caption is not None:
-        final = caption
-    else:
-        current = read_caption(
-            finding["dataset_id"], str(finding["media_id"]), caption_type
-        )
-        final = caption_judge.apply_fix(
+    current = read_caption(
+        finding["dataset_id"], str(finding["media_id"]), caption_type
+    )
+    final = caption
+    if final is None:
+        final = caption_judge.resolve_fix(
             finding["caption_before"], current, finding["caption_after"]
-        )
+        )["text"]
     write_caption(
         finding["dataset_id"], str(finding["media_id"]), caption_type, final
     )
     store.decide_finding(
-        finding["id"], store.STATUS_ACCEPTED, applied_caption=final
+        finding["id"],
+        store.STATUS_ACCEPTED,
+        applied_caption=final,
+        undo_caption=current,
     )
-    # Rebase the media's other pending findings onto the new caption: their
-    # "original" then shows this accept applied, and their proposal is the
-    # same fix re-applied on top — the next accept diffs against reality.
-    for sibling in store.pending_for_media(
-        finding["dataset_id"],
-        finding["media_id"],
-        finding["caption_type_id"],
-    ):
-        rebased = caption_judge.apply_fix(
-            sibling["caption_before"], final, sibling["caption_after"]
-        )
-        store.rebase_finding(sibling["id"], final, rebased)
 
 
 def decide_review_finding(
     finding_id: int, action: str, caption: str = None
 ) -> dict:
-    """Accept (write a new revision) or reject one finding; return it.
-
-    ``caption`` overrides the proposed text (an inline edit before accept).
-    """
+    """Accept (``caption`` = inline-edit override) or reject one finding."""
     finding = store.get_finding(finding_id)
     if finding is None:
         return {}
@@ -1011,18 +1004,19 @@ def decide_review_finding(
 
 
 def undo_review_finding(finding_id: int) -> dict:
-    """Undo a decision: restore the original caption and reopen the finding."""
+    """Undo: restore the pre-accept snapshot and reopen the finding."""
     finding = store.get_finding(finding_id)
     if finding is None:
         return {}
     if finding["status"] == store.STATUS_ACCEPTED:
         type_row = store.get_caption_type(finding["caption_type_id"])
         caption_type = type_row["name"] if type_row else ""
+        text = finding.get("undo_caption")
         write_caption(
             finding["dataset_id"],
             str(finding["media_id"]),
             caption_type,
-            finding["caption_before"],
+            text if text is not None else finding["caption_before"],
         )
     store.reopen_finding(finding_id)
     return store.get_finding(finding_id)
@@ -1048,6 +1042,20 @@ def accept_rule_fixes(dataset_ref, rule_id: int) -> int:
     for finding in findings:
         _apply_accept(finding)
     return len(findings)
+
+
+def reject_all_findings(dataset_ref) -> int:
+    """Reject every pending finding of a dataset; return the count."""
+    dataset_id = _dataset_id(dataset_ref)
+    return 0 if dataset_id is None else store.reject_all_pending(dataset_id)
+
+
+def clear_review_history(dataset_ref) -> int:
+    """Delete the dataset's decided findings (history); return the count."""
+    dataset_id = _dataset_id(dataset_ref)
+    return (
+        0 if dataset_id is None else store.clear_decided_findings(dataset_id)
+    )
 
 
 def media_path(dataset_ref, key: str) -> str | None:

@@ -26,6 +26,8 @@ class ProfileBody(BaseModel):
     """
 
     name: str | None = None
+    source: str | None = None  # "local" | "hf"
+    repo: str | None = None  # HF hub repo id (source == "hf")
     file: str | None = None
     dir: str | None = None
     format: str | None = None
@@ -47,6 +49,12 @@ class ProfileSelectBody(BaseModel):
 
     role: str  # "caption" | "judge"
     id: int
+
+
+class ProfilePromptBody(BaseModel):
+    """Body remembering the prompt preset last used with a profile."""
+
+    title: str
 
 
 class ProfileDetectBody(BaseModel):
@@ -132,6 +140,8 @@ class GenerateBody(BaseModel):
     # Off = caption only media whose caption is still empty; on (default)
     # regenerates every targeted media, already-captioned ones included.
     recaption: bool = True
+    # Free the VRAM when the job is done (default: keep the model resident).
+    unload_after: bool = False
 
 
 class DeployBody(BaseModel):
@@ -199,6 +209,8 @@ class ReviewRunBody(BaseModel):
     scope: str = "all"  # all | selection | flagged | single
     rule_ids: list[int] | None = None  # None = every enabled rule
     seed: int | None = None
+    # Free the VRAM when the run is done (default: keep the model resident).
+    unload_after: bool = False
 
 
 class ReviewDecideBody(BaseModel):

@@ -256,3 +256,28 @@ def delete_tag_grounding(media_id: int, tag_id: int) -> None:
         "DELETE FROM media_tag_grounding WHERE media_id = ? AND tag_id = ?",
         (media_id, tag_id),
     )
+
+
+def grounding_history_report() -> dict:
+    """Return ``{count, bytes}`` for the stored caption-claim history.
+
+    ``count`` is the claim rows across every grounded revision; ``bytes``
+    their text weight (the scores themselves are a few bytes each).
+    """
+    row = _query_one(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(text)), 0) AS b "
+        "FROM caption_grounding_claim"
+    )
+    if row is None:
+        return {"count": 0, "bytes": 0}
+    return {"count": row["n"], "bytes": row["b"]}
+
+
+def purge_grounding_history() -> int:
+    """Delete every caption grounding (claims cascade); return the claims."""
+    row = _query_one("SELECT COUNT(*) AS n FROM caption_grounding_claim")
+    claims = row["n"] if row else 0
+    with closing(db.connect()) as conn:
+        with conn:
+            conn.execute("DELETE FROM caption_grounding")
+    return claims

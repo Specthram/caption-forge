@@ -21,6 +21,10 @@ export interface ModelInfo {
 export interface ModelProfile {
   id: number;
   name: string;
+  /** Where the weights come from: a local file, or a Hugging Face repo. */
+  source: "local" | "hf";
+  /** HF hub repo id (source === "hf"), e.g. "Qwen/Qwen3-VL-8B-Instruct". */
+  repo: string;
   file: string;
   dir: string;
   format: "gguf" | "safetensors";
@@ -34,8 +38,17 @@ export interface ModelProfile {
   think: string;
   max_tok: number;
   img_res: number;
-  /** Default prompt preset title (within the profile's type). */
+  /** Prompt preset title last used with the profile (auto-remembered). */
   prompt: string;
+  /** HF repo already in the local hub cache (always true for local). */
+  cached?: boolean;
+}
+
+/** Family/format/name guessed from a Hugging Face repo id. */
+export interface HfRepoDetect {
+  type: string;
+  format: string;
+  name: string;
 }
 
 export interface ProfileFamily {
@@ -647,7 +660,14 @@ export interface CleanupCount {
 export interface CleanupReport {
   media: CleanupCount;
   captions: CleanupCount;
+  dataset_captions: CleanupCount;
+  claims: CleanupCount;
+  quality: CleanupCount;
+  embeddings: CleanupCount;
+  index: CleanupCount;
+  crops: CleanupCount;
   patches: CleanupCount;
+  wm_backups: CleanupCount;
   thumbs: CleanupCount;
 }
 
@@ -1292,7 +1312,11 @@ export interface ReviewFinding {
   dataset_id: number;
   caption_type: string;
   key: string;
+  /** Pending only: nothing left to apply (fix already subsumed). */
   stale: boolean;
+  /** Pending only: the fix overlaps text another accept already changed —
+   * accepting takes the judge's version of that region. */
+  conflict: boolean;
 }
 
 export interface ReviewCounts {

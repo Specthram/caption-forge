@@ -66,7 +66,8 @@ export function ProfileSelector({ role }: { role: "caption" | "judge" }) {
               whiteSpace: "nowrap",
             }}
           >
-            {selected?.file || "no weights picked"}
+            {(selected?.source === "hf" ? selected.repo : selected?.file) ||
+              "no weights picked"}
           </div>
         </div>
         <EditIcon
@@ -149,10 +150,16 @@ export function ProfileSelector({ role }: { role: "caption" | "judge" }) {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {profile.file || "no weights picked"}
+                      {(profile.source === "hf"
+                        ? profile.repo
+                        : profile.file) || "no weights picked"}
                     </div>
                   </div>
-                  <TypeBadge type={profile.type} families={families} />
+                  {profile.source === "hf" ? (
+                    <HfHubChip />
+                  ) : (
+                    <TypeBadge type={profile.type} families={families} />
+                  )}
                   <EditIcon
                     onClick={(event) => {
                       event.stopPropagation();
@@ -199,6 +206,27 @@ export function ProfileSelector({ role }: { role: "caption" | "judge" }) {
         />
       )}
     </div>
+  );
+}
+
+/** Amber "hf hub" chip marking a Hugging Face source profile. */
+function HfHubChip() {
+  return (
+    <span
+      title="Hugging Face hub"
+      style={{
+        fontFamily: font.mono,
+        fontSize: 8.5,
+        fontWeight: 700,
+        padding: "1px 5px",
+        borderRadius: 4,
+        flex: "none",
+        background: colors.card,
+        color: colors.warn,
+      }}
+    >
+      hf hub
+    </span>
   );
 }
 

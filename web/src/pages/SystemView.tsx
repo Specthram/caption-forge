@@ -3,8 +3,8 @@
 import { useState } from "react";
 import {
   useBackupNow,
+  useCleanupCategory,
   useCleanupPurge,
-  useCleanupReport,
   useDbDeleteRow,
   useDbQuery,
   usePurge,
@@ -23,12 +23,23 @@ import { colors, font } from "../design/tokens";
 import { Button, Dot, Label, Spinner } from "../components/atoms";
 
 function mb(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
 }
 
 // Static copy per cleanup category (see the System handoff). The live count
 // and reclaimable size come from the API; ``badge`` turns them into the
 // right-hand text and ``note`` describes what a purge did.
+const dbNote = (result: CleanupResult) => `${result.purged} purged · vacuumed`;
+const fileNote = (result: CleanupResult) =>
+  `${result.purged} removed · ${mb(result.bytes)} freed`;
+const sizedBadge = (unit: string) => (info: CleanupCount) =>
+  `${info.count} ${unit}${info.bytes > 0 ? ` · ${mb(info.bytes)}` : ""}`;
+
 const CLEANUP_ROWS: {
   id: CleanupCategory;
   title: string;
@@ -43,8 +54,8 @@ const CLEANUP_ROWS: {
       "Deletes media rows referenced by no file and no dataset — dead rows " +
       "left behind, invisible in every grid. Their tags and caption history " +
       "cascade away.",
-    badge: (info) => `${info.count} media · unreferenced rows`,
-    note: (result) => `${result.purged} purged · vacuumed`,
+    badge: sizedBadge("media"),
+    note: dbNote,
   },
   {
     id: "captions",
@@ -52,8 +63,65 @@ const CLEANUP_ROWS: {
     desc:
       "Drops every caption version that is neither active nor pinned. The " +
       "current caption of each media is kept.",
-    badge: (info) => `${info.count} versions · superseded versions`,
-    note: (result) => `${result.purged} purged · vacuumed`,
+    badge: sizedBadge("versions"),
+    note: dbNote,
+  },
+  {
+    id: "dataset_captions",
+    title: "Captions outside datasets",
+    desc:
+      "Deletes the whole caption history of media that belong to no " +
+      "dataset. The media stay in their library; re-adding one later " +
+      "starts its captions from scratch.",
+    badge: sizedBadge("captions"),
+    note: dbNote,
+  },
+  {
+    id: "claims",
+    title: "Claims history (grounding)",
+    desc:
+      "Clears every stored SigLIP caption grounding — the claims and their " +
+      "scores. Recomputed on demand the next time you ground a caption.",
+    badge: sizedBadge("claims"),
+    note: dbNote,
+  },
+  {
+    id: "quality",
+    title: "Quality scores",
+    desc:
+      "Deletes every stored IQA quality score. Recomputed by the " +
+      "Libraries → Quality action (heavy models, GPU).",
+    badge: sizedBadge("scores"),
+    note: dbNote,
+  },
+  {
+    id: "embeddings",
+    title: "Embeddings",
+    desc:
+      "Deletes the DINOv2 / depth embedding vectors behind the diversity " +
+      "map and the auto-builder. Recomputed by the Libraries → Embeddings " +
+      "action.",
+    badge: sizedBadge("vectors"),
+    note: dbNote,
+  },
+  {
+    id: "index",
+    title: "Index data (dims & hashes)",
+    desc:
+      "Resets the per-media dimensions, perceptual hashes and image stats. " +
+      "Lookalikes and resolution filters go blind until the next " +
+      "Libraries → Index run.",
+    badge: sizedBadge("media"),
+    note: dbNote,
+  },
+  {
+    id: "crops",
+    title: "Rendered crops cache",
+    desc:
+      "Deletes the materialized crop PNGs. Crops are virtual rectangles — " +
+      "the pixels are re-rendered on demand at the next read.",
+    badge: sizedBadge("files"),
+    note: fileNote,
   },
   {
     id: "patches",
@@ -61,8 +129,17 @@ const CLEANUP_ROWS: {
     desc:
       "Removes crop / watermark cache files whose source media or dataset no " +
       "longer exists.",
-    badge: (info) => `${info.count} files · ${mb(info.bytes)}`,
-    note: (result) => `${result.purged} removed · ${mb(result.bytes)} freed`,
+    badge: sizedBadge("files"),
+    note: fileNote,
+  },
+  {
+    id: "wm_backups",
+    title: "Watermark backups",
+    desc:
+      "Deletes the pre-patch original backups. Patched media keep their " +
+      "current pixels; only the “restore original” option is lost.",
+    badge: sizedBadge("files"),
+    note: fileNote,
   },
   {
     id: "thumbs",
@@ -70,8 +147,8 @@ const CLEANUP_ROWS: {
     desc:
       "Deletes every generated thumbnail. They are rebuilt on demand as you " +
       "browse — first load is slower.",
-    badge: (info) => `${info.count} files · ${mb(info.bytes)}`,
-    note: (result) => `${result.purged} removed · ${mb(result.bytes)} freed`,
+    badge: sizedBadge("files"),
+    note: fileNote,
   },
 ];
 
@@ -82,7 +159,6 @@ export function SystemView() {
   const restore = useRestoreBackup();
   const purge = usePurge();
   const restart = useRestart();
-  const cleanup = useCleanupReport();
   const cleanupPurge = useCleanupPurge();
   const runQuery = useDbQuery();
   const deleteRow = useDbDeleteRow();
@@ -202,107 +278,30 @@ export function SystemView() {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {CLEANUP_ROWS.map((row) => {
-            const info = cleanup.data?.[row.id];
-            const count = info?.count ?? 0;
-            const empty = count === 0;
-            const done = Boolean(notes[row.id]);
-            const isArmed = armed === row.id;
             return (
-              <div
+              <CleanupRow
                 key={row.id}
-                style={{ display: "flex", alignItems: "center", gap: 12 }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600 }}>
-                      {row.title}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontFamily: font.mono,
-                        padding: "1px 7px",
-                        border: `1px solid ${colors.borderControl}`,
-                        borderRadius: 5,
-                        background: colors.card,
-                        color: empty ? colors.ok : colors.warn,
-                      }}
-                    >
-                      {info === undefined
-                        ? "…"
-                        : empty
-                          ? done
-                            ? "clean ✓"
-                            : "0"
-                          : row.badge(info)}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: colors.textMuted,
-                      lineHeight: 1.45,
-                      marginTop: 2,
-                    }}
-                  >
-                    {row.desc}
-                  </div>
-                </div>
-                {notes[row.id] && (
-                  <span
-                    style={{
-                      fontSize: 10.5,
-                      fontFamily: font.mono,
-                      color: colors.ok,
-                    }}
-                  >
-                    {notes[row.id]}
-                  </span>
-                )}
-                {isArmed ? (
-                  <>
-                    <span
-                      onClick={() => setArmed(null)}
-                      style={{
-                        fontSize: 11,
-                        color: colors.textMuted,
-                        cursor: "pointer",
-                      }}
-                    >
-                      cancel
-                    </span>
-                    <Button
-                      variant="danger"
-                      style={{ fontWeight: 700 }}
-                      disabled={cleanupPurge.isPending}
-                      onClick={() =>
-                        cleanupPurge.mutate(row.id, {
-                          onSuccess: (result) => {
-                            setNotes((prev) => ({
-                              ...prev,
-                              [row.id]: row.note(result),
-                            }));
-                            setArmed(null);
-                          },
-                        })
-                      }
-                    >
-                      Confirm — delete {count}
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    variant="danger"
-                    disabled={empty}
-                    onClick={() => {
-                      setNotes((prev) => ({ ...prev, [row.id]: undefined }));
-                      setArmed(row.id);
-                    }}
-                  >
-                    ⌫ Purge
-                  </Button>
-                )}
-              </div>
+                row={row}
+                note={notes[row.id]}
+                armed={armed === row.id}
+                purging={cleanupPurge.isPending}
+                onArm={() => {
+                  setNotes((prev) => ({ ...prev, [row.id]: undefined }));
+                  setArmed(row.id);
+                }}
+                onCancel={() => setArmed(null)}
+                onPurge={() =>
+                  cleanupPurge.mutate(row.id, {
+                    onSuccess: (result) => {
+                      setNotes((prev) => ({
+                        ...prev,
+                        [row.id]: row.note(result),
+                      }));
+                      setArmed(null);
+                    },
+                  })
+                }
+              />
             );
           })}
         </div>
@@ -404,6 +403,107 @@ export function SystemView() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+function CleanupRow({
+  row,
+  note,
+  armed,
+  purging,
+  onArm,
+  onCancel,
+  onPurge,
+}: {
+  row: (typeof CLEANUP_ROWS)[number];
+  note: string | undefined;
+  armed: boolean;
+  purging: boolean;
+  onArm: () => void;
+  onCancel: () => void;
+  onPurge: () => void;
+}) {
+  // Each row loads its own report: a slow scan (patch orphans, big cache
+  // trees) spins alone instead of stalling every category.
+  const info = useCleanupCategory(row.id);
+  const count = info.data?.count ?? 0;
+  const empty = count === 0;
+  const done = Boolean(note);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{row.title}</span>
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: font.mono,
+              padding: "1px 7px",
+              border: `1px solid ${colors.borderControl}`,
+              borderRadius: 5,
+              background: colors.card,
+              color: empty ? colors.ok : colors.warn,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            {info.data === undefined ? (
+              <>
+                <Spinner size={9} /> measuring…
+              </>
+            ) : empty ? (
+              done ? (
+                "clean ✓"
+              ) : (
+                "0"
+              )
+            ) : (
+              row.badge(info.data)
+            )}
+          </span>
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: colors.textMuted,
+            lineHeight: 1.45,
+            marginTop: 2,
+          }}
+        >
+          {row.desc}
+        </div>
+      </div>
+      {note && (
+        <span
+          style={{ fontSize: 10.5, fontFamily: font.mono, color: colors.ok }}
+        >
+          {note}
+        </span>
+      )}
+      {armed ? (
+        <>
+          <span
+            onClick={onCancel}
+            style={{ fontSize: 11, color: colors.textMuted, cursor: "pointer" }}
+          >
+            cancel
+          </span>
+          <Button
+            variant="danger"
+            style={{ fontWeight: 700 }}
+            disabled={purging}
+            onClick={onPurge}
+          >
+            Confirm — delete {count}
+          </Button>
+        </>
+      ) : (
+        <Button variant="danger" disabled={empty} onClick={onArm}>
+          ⌫ Purge
+        </Button>
+      )}
     </div>
   );
 }

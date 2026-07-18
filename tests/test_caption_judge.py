@@ -136,42 +136,111 @@ class TestCheckDetRule:
         assert cj.check_det_rule(rule, "", [])["caption_after"] == "ryn"
 
 
-class TestApplyFix:
-    """Tests for :func:`cj.apply_fix` (three-way merge on accept)."""
+class TestResolveFix:
+    """Tests for :func:`cj.resolve_fix` (base-coordinate 3-way merge)."""
 
     BASE = "a red circle on a green square, watermark bottom right"
 
     def test_unchanged_current_takes_fix_verbatim(self):
         """When nothing moved since the run, the fix applies as-is."""
         after = self.BASE.replace("watermark bottom right", "clean photo")
-        assert cj.apply_fix(self.BASE, self.BASE, after) == after
+        resolved = cj.resolve_fix(self.BASE, self.BASE, after)
+        assert resolved == {"text": after, "conflict": False}
 
-    def test_second_accept_keeps_the_first(self):
-        """Accepting fix B after fix A keeps both changes (the bug)."""
+    def test_disjoint_fixes_auto_merge(self):
+        """Accepting fix B after fix A keeps both (no conflict)."""
         fix_a = self.BASE.replace("red circle", "crimson circle")
         fix_b = self.BASE.replace("watermark bottom right", "no watermark")
-        merged = cj.apply_fix(self.BASE, fix_a, fix_b)
-        assert "crimson circle" in merged
-        assert "no watermark" in merged
-        assert "watermark bottom right" not in merged
+        resolved = cj.resolve_fix(self.BASE, fix_a, fix_b)
+        assert resolved["conflict"] is False
+        assert "crimson circle" in resolved["text"]
+        assert "no watermark" in resolved["text"]
+        assert "watermark bottom right" not in resolved["text"]
 
     def test_manual_edit_survives_an_accept(self):
         """A user edit elsewhere in the caption survives the merge."""
         edited = "MYTRIGGER " + self.BASE
         fix = self.BASE.replace("green square", "blue square")
-        merged = cj.apply_fix(self.BASE, edited, fix)
-        assert merged.startswith("MYTRIGGER ")
-        assert "blue square" in merged
+        resolved = cj.resolve_fix(self.BASE, edited, fix)
+        assert resolved["conflict"] is False
+        assert resolved["text"].startswith("MYTRIGGER ")
+        assert "blue square" in resolved["text"]
 
-    def test_conflict_prefers_the_accepted_fix(self):
-        """Both sides rewrote the same words: the just-accepted fix wins."""
+    def test_same_phrase_is_flagged_and_takes_the_judge_words(self):
+        """Both sides rewrote the same phrase: flagged, judge text wins."""
         edited = self.BASE.replace("red circle", "pink disc")
         fix = self.BASE.replace("red circle", "crimson circle")
-        merged = cj.apply_fix(self.BASE, edited, fix)
-        assert "crimson circle" in merged
-        assert "pink disc" not in merged
+        resolved = cj.resolve_fix(self.BASE, edited, fix)
+        assert resolved["conflict"] is True
+        assert "crimson circle" in resolved["text"]
+        assert "pink disc" not in resolved["text"]
+
+    def test_conflict_region_never_mixes_texts(self):
+        """A whole-sentence rewrite in conflict yields the judge's exact
+        rendering of that region, never a word-level chimera."""
+        edited = self.BASE.replace(
+            "a red circle on a green square",
+            "one big pink disc over some grass",
+        )
+        fix = self.BASE.replace(
+            "a red circle on a green square",
+            "a crimson circle on a green square",
+        )
+        resolved = cj.resolve_fix(self.BASE, edited, fix)
+        assert resolved["conflict"] is True
+        assert "a crimson circle on a green square" in resolved["text"]
+        assert "pink" not in resolved["text"]
+        assert "grass" not in resolved["text"]
 
     def test_current_already_equal_to_fix_is_stable(self):
         """Re-accepting an already applied fix changes nothing."""
         fix = self.BASE.replace("red", "crimson")
-        assert cj.apply_fix(self.BASE, fix, fix) == fix
+        resolved = cj.resolve_fix(self.BASE, fix, fix)
+        assert resolved == {"text": fix, "conflict": False}
+
+    def test_noop_fix_never_clobbers_current(self):
+        """A fix equal to its base leaves the live caption untouched."""
+        edited = "MYTRIGGER " + self.BASE
+        resolved = cj.resolve_fix(self.BASE, edited, self.BASE)
+        assert resolved == {"text": edited, "conflict": False}
+
+    def test_scattered_overlap_takes_one_whole_sentence(self):
+        """Two scattered rewrites of one sentence never interleave: the
+        judge's whole sentence wins, other sentences still merge."""
+        base = "a red ball near the old tree. watermark bottom right."
+        # First accept reworded two spots of sentence 1.
+        current = "a pink ball near the tall tree. watermark bottom right."
+        # This fix rewrites sentence 1 too (collides on "red") and also
+        # fixes sentence 2 — which must merge untouched by the conflict.
+        incoming = "a crimson sphere near the old tree. no watermark visible."
+        resolved = cj.resolve_fix(base, current, incoming)
+        assert resolved["conflict"] is True
+        assert resolved["text"] == (
+            "a crimson sphere near the old tree. no watermark visible."
+        )
+        # No chimera: nothing of the overridden rewording survives.
+        assert "pink" not in resolved["text"]
+        assert "tall" not in resolved["text"]
+
+    def test_conflict_in_one_sentence_spares_the_other(self):
+        """A conflict resolves per sentence; the untouched sentence keeps
+        the current text's changes."""
+        base = "a red ball on grass. the sky is blue."
+        current = "a pink ball on grass. the sky is very blue."
+        incoming = "a crimson ball on grass. the sky is blue."
+        resolved = cj.resolve_fix(base, current, incoming)
+        assert resolved["conflict"] is True
+        assert resolved["text"] == (
+            "a crimson ball on grass. the sky is very blue."
+        )
+
+    def test_appending_fix_is_not_dropped(self):
+        """A fix appending at the very end of the caption still applies."""
+        base = "a red ball."
+        current = "MYTRIGGER a red ball."
+        incoming = "a red ball. high quality photo."
+        resolved = cj.resolve_fix(base, current, incoming)
+        assert resolved["conflict"] is False
+        assert resolved["text"] == (
+            "MYTRIGGER a red ball. high quality photo."
+        )

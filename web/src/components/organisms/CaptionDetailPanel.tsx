@@ -15,7 +15,6 @@ import {
   useSaveCaption,
   useSelectRevision,
   useSetRepeats,
-  useTagCategories,
 } from "../../api/hooks";
 import { colors, deployColor, font } from "../../design/tokens";
 import { useUiStore } from "../../store/uiStore";
@@ -23,6 +22,7 @@ import { useCaptionStore } from "../../store/captionStore";
 import { useJobsStore } from "../../store/jobsStore";
 import { Button, Dot, IconButton, Label } from "../atoms";
 import { QualityBadge, RepeatsStepper, TagChip } from "../molecules";
+import { TagPicker } from "../molecules/TagPicker";
 import { CaptionGroundingCard } from "./GroundingCard";
 import { CaptionScoreCard } from "./CaptionScoreCard";
 import { CropSection } from "./CropSection";
@@ -42,7 +42,6 @@ export function CaptionDetailPanel() {
     captionType,
     qualityMetric,
   );
-  const categories = useTagCategories();
   const saveCaption = useSaveCaption();
   const selectRevision = useSelectRevision();
   const setRepeats = useSetRepeats();
@@ -60,7 +59,6 @@ export function CaptionDetailPanel() {
   const toggleLock = useCaptionStore((state) => state.toggleLock);
 
   const [draft, setDraft] = useState("");
-  const [newTag, setNewTag] = useState("");
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const loadedRef = useRef<string | null>(null);
 
@@ -380,36 +378,14 @@ export function CaptionDetailPanel() {
               />
             ))}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-            <input
-              value={newTag}
-              onChange={(event) => setNewTag(event.target.value)}
+          <div style={{ marginTop: 8 }}>
+            <TagPicker
               placeholder="+ add tag"
-              style={{
-                flex: 1,
-                padding: "5px 8px",
-                borderRadius: 6,
-                border: `1px solid ${colors.borderControl}`,
-                background: colors.input,
-                color: colors.text,
-                fontSize: 12,
-              }}
+              exclude={new Set(data.tags.map((tag) => tag.id))}
+              onPick={(tag) =>
+                addTag.mutate({ key: data.key, tag_id: tag.id })
+              }
             />
-            <Button
-              disabled={!newTag.trim() || !categories.data}
-              onClick={() => {
-                const category = categories.data?.categories[0];
-                if (!category) return;
-                addTag.mutate({
-                  key: data.key,
-                  name: newTag.trim(),
-                  category_id: category.id,
-                });
-                setNewTag("");
-              }}
-            >
-              +
-            </Button>
           </div>
         </div>
 
@@ -532,6 +508,7 @@ function RegenerateButton({
         ground_after: gen.groundAfter,
         // An explicit per-media regenerate always rewrites, filled or not.
         recaption: true,
+        unload_after: gen.unloadAfter,
       },
       { onSuccess: (data) => job.start(data.job_id) },
     );

@@ -272,52 +272,65 @@ def pending_for_rule(dataset_id: int, rule_id: int) -> list:
     return [dict(row) for row in rows]
 
 
-def pending_for_media(
-    dataset_id: int, media_id: int, caption_type_id: int
-) -> list:
-    """Return one media's pending findings for a caption type."""
-    rows = _query_all(
-        f"{_FINDING_SELECT} WHERE run.dataset_id = ? AND f.media_id = ? "
-        "AND f.caption_type_id = ? AND f.status = ? ORDER BY f.id DESC",
-        (dataset_id, media_id, caption_type_id, STATUS_PENDING),
-    )
-    return [dict(row) for row in rows]
-
-
-def rebase_finding(finding_id: int, before: str, after: str) -> None:
-    """Rewrite a pending finding's before/after pair.
-
-    Used when a sibling accept rewrote the live caption: the finding's
-    "original" must show the caption as it now is, and its proposal the
-    same fix re-applied on top (see ``storage._apply_accept``).
-    """
-    _write(
-        "UPDATE review_finding SET caption_before = ?, caption_after = ? "
-        "WHERE id = ?",
-        (before, after, finding_id),
-    )
-
-
 def decide_finding(
-    finding_id: int, status: str, applied_caption: str = None
+    finding_id: int,
+    status: str,
+    applied_caption: str = None,
+    undo_caption: str = None,
 ) -> None:
     """Record a human decision on a finding (accept / reject).
 
-    ``applied_caption`` is the final text when the user edited the proposal
-    before accepting; it is stored so an undo can tell what was applied.
+    ``applied_caption`` is the final text that was written;
+    ``undo_caption`` the live caption the accept replaced, so an undo
+    restores exactly that text (not the run-time original, which earlier
+    accepts may have moved past).
     """
     _write(
         "UPDATE review_finding SET status = ?, applied_caption = ?, "
-        "decided_at = datetime('now') WHERE id = ?",
-        (status, applied_caption, finding_id),
+        "undo_caption = ?, decided_at = datetime('now') WHERE id = ?",
+        (status, applied_caption, undo_caption, finding_id),
     )
+
+
+def reject_all_pending(dataset_id: int) -> int:
+    """Reject every pending finding of a dataset; return how many.
+
+    Rejecting never touches a caption, so one UPDATE is enough — no
+    per-finding apply pass like the bulk accepts.
+    """
+    with closing(db.connect()) as conn:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE review_finding SET status = ?, "
+                "decided_at = datetime('now') "
+                "WHERE status = ? AND run_id IN "
+                "(SELECT id FROM review_run WHERE dataset_id = ?)",
+                (STATUS_REJECTED, STATUS_PENDING, dataset_id),
+            )
+            return cursor.rowcount
+
+
+def clear_decided_findings(dataset_id: int) -> int:
+    """Delete a dataset's decided findings (the history); return how many.
+
+    Pending findings stay; accepted captions keep their revisions (this
+    only clears the queue's history, never a caption).
+    """
+    with closing(db.connect()) as conn:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM review_finding WHERE status != ? AND run_id IN "
+                "(SELECT id FROM review_run WHERE dataset_id = ?)",
+                (STATUS_PENDING, dataset_id),
+            )
+            return cursor.rowcount
 
 
 def reopen_finding(finding_id: int) -> None:
     """Return a decided finding to ``pending`` (the undo path)."""
     _write(
         "UPDATE review_finding SET status = ?, applied_caption = NULL, "
-        "decided_at = NULL WHERE id = ?",
+        "undo_caption = NULL, decided_at = NULL WHERE id = ?",
         (STATUS_PENDING, finding_id),
     )
 
